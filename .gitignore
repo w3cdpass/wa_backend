@@ -1,0 +1,5 @@
+node_modules
+.env
+API_DOCUMENTATION.md
+docker-compose.yml
+.agents
