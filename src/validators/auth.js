@@ -17,9 +17,11 @@ export const signupSchema = z.object({
 });
 
 export const refreshTokenSchema = z.object({
-  body: z.object({
-    refreshToken: z.string().min(1, 'Refresh token is required'),
-  }),
+  body: z
+    .object({
+      refreshToken: z.string().min(1, 'Refresh token is required').optional(),
+    })
+    .optional(),
 });
 
 export const requestOtpSchema = z.object({

@@ -59,17 +59,17 @@ export const validateRefreshToken = async (refreshToken) => {
       throw new AppError('Invalid token type', 401);
     }
 
-    const storedToken = await RefreshToken.findOne({ token: refreshToken }).populate('user');
-    
+    const storedToken = await RefreshToken.findOne({ token: refreshToken }).populate('userId');
+
     if (!storedToken || storedToken.revokedAt || storedToken.expiresAt < new Date()) {
       throw new AppError('Refresh token expired or revoked', 401);
     }
 
-    if (!storedToken.user.isActive) {
+    if (!storedToken.userId?.isActive) {
       throw new AppError('User is inactive', 401);
     }
 
-    return storedToken.user;
+    return storedToken.userId;
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('Invalid refresh token', 401);
@@ -109,18 +109,17 @@ export const getUserWithTokens = async (userId) => {
   );
 };
 
-export const getTenantOrCreateDemo = async (subdomain = 'demo') => {
-  let tenant = await Tenant.findOne({ subdomain });
+export const getTenantOrCreateDemo = async (slug = 'demo') => {
+  let tenant = await Tenant.findOne({ slug });
   if (!tenant) {
-    tenant = await Tenant.create({ name: 'Demo Tenant', subdomain });
+    tenant = await Tenant.create({ name: 'Demo Tenant', slug });
     await CreditWallet.create({ tenantId: tenant._id, balance: 10000 });
   }
   return tenant;
 };
 
-export const login = async (email, password, tenantId) => {
-  const tenant = await getTenantOrCreateDemo();
-  const user = await User.findOne({ email, tenantId: tenant._id });
+export const login = async (email, password) => {
+  const user = await User.findOne({ email: String(email).toLowerCase() });
   if (!user) throw new AppError('Invalid email or password', 401);
 
   const isValid = await verifyPassword(password, user.passwordHash);

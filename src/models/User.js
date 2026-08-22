@@ -5,7 +5,8 @@ const userSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true },
   name: { type: String, required: true },
   businessName: { type: String, trim: true },
-  role: { type: String, enum: ['owner', 'admin', 'agent', 'viewer'], default: 'viewer' },
+  role: { type: String, enum: ['SuperAdmin', 'Reseller', 'Client', 'owner', 'admin', 'agent', 'viewer'], default: 'Client' },
+  virtualNumber: { type: String, trim: true },
   metaUserId: { type: String, trim: true },
   isActive: { type: Boolean, default: true },
   lastLoginAt: Date,
@@ -15,6 +16,7 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ tenantId: 1 });
 userSchema.index({ tenantId: 1, role: 1 });
+userSchema.index({ tenantId: 1, virtualNumber: 1 });
 
 export const User = mongoose.model('User', userSchema);
 export default User;

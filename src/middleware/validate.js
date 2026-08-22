@@ -13,8 +13,8 @@ export const validate = (schema) => (req, res, next) => {
   } catch (error) {
     if (error.errors) {
       return res.status(400).json({
-        error: 'Validation failed',
-        details: error.errors.map(e => ({ field: e.path.join('.'), message: e.message })),
+        message: 'Validation failed',
+        errors: error.errors.map(e => ({ field: e.path.join('.'), message: e.message })),
       });
     }
     next(error);

@@ -6,7 +6,7 @@ export const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No access token provided' });
+      return res.status(401).json({ message: 'No access token provided' });
     }
 
     const token = authHeader.split(' ')[1];
@@ -17,12 +17,12 @@ export const authenticate = async (req, res, next) => {
     );
 
     if (!user || !user.isActive) {
-      return res.status(401).json({ error: 'User not found or inactive' });
+      return res.status(401).json({ message: 'User not found or inactive' });
     }
 
     const tenantId = req.headers['x-tenant-id'] || decoded.tenantId;
     if (tenantId && tenantId !== user.tenantId.toString()) {
-      return res.status(403).json({ error: 'Tenant mismatch' });
+      return res.status(403).json({ message: 'Tenant mismatch' });
     }
 
     req.user = user;
@@ -30,12 +30,12 @@ export const authenticate = async (req, res, next) => {
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Access token expired' });
+      return res.status(401).json({ message: 'Access token expired' });
     }
     if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ error: 'Invalid access token' });
+      return res.status(401).json({ message: 'Invalid access token' });
     }
-    return res.status(401).json({ error: 'Authentication failed' });
+    return res.status(401).json({ message: 'Authentication failed' });
   }
 };
 
@@ -66,7 +66,7 @@ export const optionalAuth = async (req, res, next) => {
 export const requireRole = (...roles) => {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
+      return res.status(403).json({ message: 'Insufficient permissions' });
     }
     next();
   };
