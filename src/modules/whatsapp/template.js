@@ -1,6 +1,7 @@
 import { Template } from '../../models/Template.js';
 import { Contact } from '../../models/Contact.js';
 import { WhatsAppConfig } from '../../models/WhatsAppConfig.js';
+import { whatsAppConfigService } from './config.js';
 import { TemplateAPI, createTemplateAPI, buildTemplatePayload, buildSendComponents } from '../meta/index.js';
 import { validateTemplateStructure, validateVariables } from '../../utils/template.js';
 
@@ -31,7 +32,7 @@ export class TemplateService {
     const template = await Template.findOne({ _id: templateId, tenantId });
     if (!template) throw new Error('Template not found');
     
-    const config = await WhatsAppConfig.findOne({ tenantId });
+    const config = await whatsAppConfigService.getConfig(tenantId);
     if (!config) throw new Error('WhatsApp not configured');
     
     const templateAPI = createTemplateAPI(config.accessToken);
@@ -55,7 +56,7 @@ export class TemplateService {
   }
 
   async syncFromMeta(tenantId) {
-    const config = await WhatsAppConfig.findOne({ tenantId });
+    const config = await whatsAppConfigService.getConfig(tenantId);
     if (!config) throw new Error('WhatsApp not configured');
     
     const templateAPI = createTemplateAPI(config.accessToken);
@@ -152,11 +153,11 @@ export class TemplateService {
     if (!template) throw new Error('Template not found');
     
     if (template.metaTemplateId) {
-      const config = await WhatsAppConfig.findOne({ tenantId });
-      if (config?.accessToken) {
-        const templateAPI = createTemplateAPI(config.accessToken);
+      const waConfig = await whatsAppConfigService.getConfig(tenantId);
+      if (waConfig?.accessToken) {
+        const templateAPI = createTemplateAPI(waConfig.accessToken);
         try {
-          await templateAPI.deleteTemplate(template.metaTemplateId, config.accessToken);
+          await templateAPI.deleteTemplate(template.metaTemplateId, waConfig.accessToken);
         } catch (e) {
           console.warn('Failed to delete from Meta:', e.message);
         }

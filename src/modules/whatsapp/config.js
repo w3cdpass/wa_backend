@@ -93,6 +93,7 @@ export class WhatsAppConfigService {
           verifiedName: phoneInfo.verifiedName,
           qualityRating: phoneInfo.qualityRating,
           lastSyncAt: new Date(),
+          status: 'connected',
         } 
       }
     );
