@@ -1,6 +1,7 @@
 import { WhatsAppConfig } from '../../models/WhatsAppConfig.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
 import { MetaClient, PhoneAPI, createPhoneAPI } from '../meta/index.js';
+import crypto from 'crypto';
 
 export class WhatsAppConfigService {
   async getConfig(tenantId) {
@@ -10,26 +11,55 @@ export class WhatsAppConfigService {
     return {
       ...config.toObject(),
       accessToken: decrypt(config.accessTokenEnc),
+      appSecret: config.appSecretEnc ? decrypt(config.appSecretEnc) : null,
       pin: config.pinEnc ? decrypt(config.pinEnc) : null,
     };
   }
 
   async saveConfig(tenantId, data) {
-    const { accessToken, phoneNumberId, wabaId, businessAccountId, pin, ...rest } = data;
-    
-    const update = {
-      ...rest,
-      accessTokenEnc: encrypt(accessToken),
-      pinEnc: pin ? encrypt(pin) : undefined,
-    };
-    
+    const { accessToken, phoneNumberId, wabaId, businessAccountId, appSecret, pin } = data;
+
+    const update = { status: 'pending' };
+    if (accessToken) update.accessTokenEnc = encrypt(accessToken);
+    if (phoneNumberId) update.phoneNumberId = phoneNumberId;
+    const resolvedWabaId = wabaId || businessAccountId;
+    if (resolvedWabaId) update.wabaId = resolvedWabaId;
+    if (appSecret) update.appSecretEnc = encrypt(appSecret);
+    if (pin) update.pinEnc = encrypt(pin);
+
     const config = await WhatsAppConfig.findOneAndUpdate(
       { tenantId },
-      { $set: update },
+      { $set: update, $setOnInsert: { verifyToken: crypto.randomBytes(16).toString('hex') } },
       { upsert: true, new: true, runValidators: true }
     );
     
     return config;
+  }
+
+  async getMaskedConfig(tenantId) {
+    const config = await WhatsAppConfig.findOne({ tenantId }).select('-accessTokenEnc -pinEnc -appSecretEnc');
+    if (!config) return null;
+    return config;
+  }
+
+  async ensureVerifyToken(tenantId) {
+    let config = await WhatsAppConfig.findOne({ tenantId });
+    if (!config) throw new Error('WhatsApp not configured. Save your credentials first.');
+    if (!config.verifyToken) {
+      config.verifyToken = crypto.randomBytes(16).toString('hex');
+      await config.save();
+    }
+    return config;
+  }
+
+  async disconnect(tenantId) {
+    const config = await WhatsAppConfig.findOne({ tenantId });
+    if (!config) throw new Error('WhatsApp not configured');
+    await WhatsAppConfig.findOneAndUpdate(
+      { tenantId },
+      { $set: { status: 'disconnected', isRegistered: false } }
+    );
+    return { success: true };
   }
 
   async verifyAndRegister(tenantId) {

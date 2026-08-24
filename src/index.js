@@ -18,6 +18,8 @@ import contactsRoutes from './routes/contacts.js';
 import creditsRoutes from './routes/credits.js';
 import mediaRoutes from './routes/media.js';
 import notificationsRoutes from './routes/notifications.js';
+import whatsappRoutes from './routes/whatsapp.js';
+import webhookRoutes from './routes/webhooks.js';
 
 const app = express();
 
@@ -64,6 +66,10 @@ app.use('/api/contacts', contactsRoutes);
 app.use('/api/credits', creditsRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
+
+// Public Meta webhook receiver (no auth — verified via hub.verify_token / x-hub-signature-256)
+app.use('/api/webhooks/whatsapp', webhookRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

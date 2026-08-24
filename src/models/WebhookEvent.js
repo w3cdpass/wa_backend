@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const webhookEventSchema = new mongoose.Schema({
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },
-  type: { type: String, enum: ['message', 'status', 'template', 'quality', 'phone_number', 'account_update'], required: true },
+  type: { type: String, enum: ['message', 'status', 'template', 'quality', 'phone_number', 'account_update', 'webhook_verified'], required: true },
   metaEventId: String,
   payload: { type: mongoose.Schema.Types.Mixed, required: true },
   processed: { type: Boolean, default: false },

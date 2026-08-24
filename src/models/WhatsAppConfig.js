@@ -7,6 +7,8 @@ const whatsAppConfigSchema = new mongoose.Schema({
   verifiedName: { type: String },
   qualityRating: { type: String, enum: ['GREEN', 'YELLOW', 'RED', 'UNKNOWN'], default: 'UNKNOWN' },
   accessTokenEnc: { type: String, required: true },
+  appSecretEnc: { type: String },
+  verifyToken: { type: String },
   wabaId: { type: String, required: true },
   isRegistered: { type: Boolean, default: false },
   pinEnc: { type: String },
