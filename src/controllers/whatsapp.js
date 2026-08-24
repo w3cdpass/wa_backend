@@ -130,12 +130,22 @@ const stripMetaOnly = (data) => ({
   cards: data.cards?.map(({ headerHandle, ...rest }) => rest),
 });
 
+// Template endpoints must surface real failure causes — never a bare
+// "Internal server error". Anything without a statusCode is a client-fixable
+// problem (bad media URL, missing config) or a Meta rejection.
+const normalizeTemplateError = (error) => {
+  if (!error.statusCode) {
+    error.statusCode = /not found/i.test(error.message || '') ? 404 : 400;
+  }
+  return error;
+};
+
 export const createTemplateController = async (req, res, next) => {
   try {
     const template = await templateService.createTemplate(req.tenantId, req.body);
     res.status(201).json(template);
   } catch (error) {
-    next(error);
+    next(normalizeTemplateError(error));
   }
 };
 
@@ -144,7 +154,7 @@ export const updateTemplateController = async (req, res, next) => {
     const template = await templateService.updateTemplate(req.params.id, req.tenantId, stripMetaOnly(req.body));
     res.json(template);
   } catch (error) {
-    next(error);
+    next(normalizeTemplateError(error));
   }
 };
 
@@ -153,7 +163,7 @@ export const deleteTemplateController = async (req, res, next) => {
     await templateService.deleteTemplate(req.params.id, req.tenantId);
     res.json({ success: true });
   } catch (error) {
-    next(error);
+    next(normalizeTemplateError(error));
   }
 };
 
@@ -164,6 +174,6 @@ export const submitTemplateController = async (req, res, next) => {
     const template = await templateService.submitToMeta(req.params.id, req.tenantId);
     res.json({ message: 'Template submitted to Meta for approval', template });
   } catch (error) {
-    next(error);
+    next(normalizeTemplateError(error));
   }
 };

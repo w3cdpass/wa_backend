@@ -8,12 +8,25 @@ const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
  * for IMAGE/VIDEO/DOCUMENT headers — a plain URL is rejected at creation.
  * This uploads the bytes and returns the handle.
  */
+async function readMetaError(res) {
+  let body = '';
+  try {
+    const data = await res.json();
+    body = data?.error?.message || JSON.stringify(data);
+  } catch {
+    try { body = await res.text(); } catch { /* ignore */ }
+  }
+  return body ? `${res.status} — ${body}` : String(res.status);
+}
+
 export async function uploadResumableMedia({ accessToken, fileName, mimeType, bytes }) {
   const appId = config.whatsapp.meta.appId;
   if (!appId) {
-    throw new Error(
-      'Media-header templates need META_APP_ID set in backend env (used for Meta Resumable Upload).'
+    const err = new Error(
+      'META_APP_ID is not set in backend env — cannot pre-upload media handles (will fall back to public URL).'
     );
+    err.code = 'NO_APP_ID';
+    throw err;
   }
 
   const startParams = new URLSearchParams({
@@ -27,7 +40,7 @@ export async function uploadResumableMedia({ accessToken, fileName, mimeType, by
     method: 'POST',
   });
   if (!startRes.ok) {
-    throw new Error(`Meta resumable upload start failed: ${startRes.status}`);
+    throw new Error(`Meta resumable upload start failed: ${await readMetaError(startRes)}`);
   }
   const startData = await startRes.json();
   if (!startData.id) throw new Error('Resumable upload did not return a session id.');
@@ -41,7 +54,7 @@ export async function uploadResumableMedia({ accessToken, fileName, mimeType, by
     body: bytes,
   });
   if (!uploadRes.ok) {
-    throw new Error(`Meta resumable upload failed: ${uploadRes.status}`);
+    throw new Error(`Meta resumable upload failed: ${await readMetaError(uploadRes)}`);
   }
   const uploadData = await uploadRes.json();
   if (!uploadData.h) throw new Error('Resumable upload did not return a handle.');
@@ -73,7 +86,7 @@ export async function ensureHeaderHandle(template, accessToken) {
 
     let res;
     try {
-      res = await fetch(target.headerMediaUrl, { redirect: 'manual', signal: AbortSignal.timeout(10000) });
+      res = await fetch(target.headerMediaUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
     } catch {
       throw new Error('Could not fetch the header image URL. Make sure it is publicly reachable.');
     }

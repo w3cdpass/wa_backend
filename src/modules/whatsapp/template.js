@@ -49,10 +49,15 @@ export class TemplateService {
     const template = await Template.findOne({ _id: templateId, tenantId });
     if (!template) throw new Error('Template not found');
 
-    // Mutates headerHandle / card.headerHandle on the doc when a handle
-    // can be derived from headerMediaUrl; no-op when already present.
-    await ensureHeaderHandle(template, config.accessToken);
-    await template.save();
+    // Best-effort: Meta prefers example.header_handle (uploaded bytes), but
+    // example.header_url is still accepted at creation — so an upload failure
+    // (missing META_APP_ID, transient Graph error) must NOT block submission.
+    try {
+      await ensureHeaderHandle(template, config.accessToken);
+      await template.save();
+    } catch (err) {
+      console.warn('[template] header handle upload skipped:', err.message);
+    }
     return template;
   }
 
