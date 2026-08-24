@@ -3,28 +3,56 @@ import { Contact } from '../../models/Contact.js';
 import { WhatsAppConfig } from '../../models/WhatsAppConfig.js';
 import { whatsAppConfigService } from './config.js';
 import { TemplateAPI, createTemplateAPI, buildTemplatePayload, buildSendComponents } from '../meta/index.js';
+import { ensureHeaderHandle } from '../meta/uploads.js';
 import { validateTemplateStructure, validateVariables } from '../../utils/template.js';
 
 export class TemplateService {
+  static deriveTemplateType(data) {
+    if (data.cards?.length) return 'carousel';
+    if (data.category === 'AUTHENTICATION') return 'authentication';
+    if (['image', 'video', 'document'].includes(data.headerType)) return 'media';
+    return 'standard';
+  }
+
   async createTemplate(tenantId, data) {
-    const { valid, errors } = validateTemplateStructure(data);
-    if (!valid) throw new Error(errors.join(', '));
-    
-    const template = await Template.create({ tenantId, ...data, status: 'DRAFT' });
+    const template = await Template.create({
+      tenantId,
+      ...data,
+      templateType: TemplateService.deriveTemplateType(data),
+      status: 'DRAFT',
+    });
     return template;
   }
 
   async updateTemplate(templateId, tenantId, data) {
-    const { valid, errors } = validateTemplateStructure(data);
-    if (!valid) throw new Error(errors.join(', '));
-    
-    const template = await Template.findOneAndUpdate(
-      { _id: templateId, tenantId },
-      { $set: data },
-      { new: true, runValidators: true }
-    );
-    
+    const template = await Template.findOne({ _id: templateId, tenantId });
     if (!template) throw new Error('Template not found');
+    if (!['DRAFT', 'REJECTED'].includes(template.status)) {
+      throw new Error('Only DRAFT or REJECTED templates can be edited');
+    }
+    if (template.metaTemplateId && ['APPROVED', 'PENDING'].includes(template.status)) {
+      throw new Error('Template already submitted — sync from Meta instead');
+    }
+
+    Object.assign(template, data, {
+      templateType: TemplateService.deriveTemplateType({ ...template.toObject(), ...data }),
+      submissionError: null,
+      updatedAt: new Date(),
+    });
+    await template.save();
+    return template;
+  }
+
+  async ensureMediaHandles(templateId, tenantId) {
+    const config = await whatsAppConfigService.getConfig(tenantId);
+    if (!config) throw new Error('WhatsApp not configured');
+    const template = await Template.findOne({ _id: templateId, tenantId });
+    if (!template) throw new Error('Template not found');
+
+    // Mutates headerHandle / card.headerHandle on the doc when a handle
+    // can be derived from headerMediaUrl; no-op when already present.
+    await ensureHeaderHandle(template, config.accessToken);
+    await template.save();
     return template;
   }
 
@@ -63,12 +91,13 @@ export class TemplateService {
     const metaTemplates = await templateAPI.syncAllTemplates(config.wabaId, config.accessToken);
     
     let created = 0, updated = 0, errors = 0;
+    const errorDetails = [];
     
     for (const metaTemplate of metaTemplates) {
       try {
         const existing = await Template.findOne({ 
           tenantId, 
-          name: metaTemplate.name, 
+          name: String(metaTemplate.name || '').toLowerCase(), // schema lowercases names on save
           language: metaTemplate.language 
         });
         
@@ -87,12 +116,13 @@ export class TemplateService {
       } catch (e) {
         console.error('Template sync error:', e);
         errors++;
+        errorDetails.push({ name: metaTemplate.name, message: e.message });
       }
     }
     
     await WhatsAppConfig.findOneAndUpdate({ tenantId }, { lastSyncAt: new Date() });
     
-    return { total: metaTemplates.length, created, updated, errors };
+    return { total: metaTemplates.length, created, updated, errors, errorDetails };
   }
 
   parseMetaTemplate(meta) {
@@ -131,7 +161,9 @@ export class TemplateService {
     
     return {
       name: meta.name,
-      category: meta.category,
+      category: ['MARKETING', 'UTILITY', 'AUTHENTICATION'].includes(meta.category)
+        ? meta.category
+        : 'MARKETING',
       language: meta.language,
       status: meta.status,
       headerType,
@@ -144,8 +176,15 @@ export class TemplateService {
         body: body?.example?.body_text?.[0] || [],
         header: header?.example?.header_text || [],
       },
-      qualityScore: meta.quality_score?.score || null,
+      qualityScore: this.normalizeQualityScore(meta.quality_score),
     };
+  }
+
+  normalizeQualityScore(qualityScore) {
+    const raw = typeof qualityScore === 'string'
+      ? qualityScore
+      : qualityScore?.score;
+    return ['GREEN', 'YELLOW', 'RED'].includes(raw) ? raw : null;
   }
 
   async deleteTemplate(templateId, tenantId) {

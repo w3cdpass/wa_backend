@@ -1,6 +1,16 @@
 import { MetaClient, MetaAPIError } from './client.js';
 import { extractVariableIndices } from '../../utils/template.js';
 
+function stripGraphBase(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.replace(/^\/v[\d.]+/, '') + parsed.search;
+  } catch {
+    return url.replace(/^https:\/\/graph\.facebook\.com\/v[\d.]+/, '');
+  }
+}
+
 export class TemplateAPI {
   constructor(metaClient) {
     this.client = metaClient;
@@ -39,23 +49,22 @@ export class TemplateAPI {
 
   async syncAllTemplates(wabaId, accessToken) {
     const allTemplates = [];
-    let nextUrl = null;
     let pageCount = 0;
     const MAX_PAGES = 50;
 
+    let nextPath = `/${wabaId}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`;
+
     do {
       pageCount++;
-      const path = nextUrl || `/${wabaId}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`;
-      
       const client = new MetaClient(accessToken);
-      const response = await client.get(path.replace('https://graph.facebook.com/v21.0', ''));
-      
+      const response = await client.get(nextPath);
+
       if (response.data) {
         allTemplates.push(...response.data);
       }
-      
-      nextUrl = response.paging?.next ? response.paging.next.replace('https://graph.facebook.com/v21.0', '') : null;
-    } while (nextUrl && pageCount < MAX_PAGES);
+
+      nextPath = stripGraphBase(response.paging?.next);
+    } while (nextPath && pageCount < MAX_PAGES);
 
     return allTemplates;
   }
@@ -64,28 +73,41 @@ export class TemplateAPI {
 export function buildTemplatePayload(template) {
   const components = [];
 
-  if (template.headerType && template.headerType !== 'none') {
-    const header = { type: 'HEADER', format: template.headerType.toUpperCase() };
-    
-    if (template.headerType === 'text' && template.headerContent) {
-      header.text = template.headerContent;
-      if (extractVariableIndices(template.headerContent).length > 0) {
-        header.example = { header_text: [template.headerContent] };
-      }
-    } else if (['image', 'video', 'document'].includes(template.headerType)) {
-      header.example = { header_handle: template.headerHandle ? [template.headerHandle] : [] };
+  // Carousel templates carry per-card components; no top-level HEADER/BUTTONS
+  if (template.templateType === 'carousel' && template.cards?.length) {
+    if (template.bodyText) {
+      components.push(buildBodyComponent(template));
     }
-    
-    components.push(header);
+    components.push({
+      type: 'CAROUSEL',
+      cards: template.cards.map((card) => ({
+        elements: [
+          {
+            type: 'HEADER',
+            format: 'IMAGE',
+            example: card.headerHandle
+              ? { header_handle: [card.headerHandle] }
+              : { header_url: [card.headerMediaUrl] },
+          },
+          { type: 'BODY', text: card.bodyText || '' },
+          ...(card.buttons?.length ? [{ type: 'BUTTONS', buttons: card.buttons.map(buildMetaButton) }] : []),
+        ],
+      })),
+    });
+
+    return {
+      name: template.name,
+      category: template.category,
+      language: template.language,
+      components,
+    };
   }
 
+  const header = buildHeaderComponent(template);
+  if (header) components.push(header);
+
   if (template.bodyText) {
-    const body = { type: 'BODY', text: template.bodyText };
-    const varCount = extractVariableIndices(template.bodyText).length;
-    if (varCount > 0 && template.sampleValues?.body?.length) {
-      body.example = { body_text: [template.sampleValues.body] };
-    }
-    components.push(body);
+    components.push(buildBodyComponent(template));
   }
 
   if (template.footerText) {
@@ -93,33 +115,7 @@ export function buildTemplatePayload(template) {
   }
 
   if (template.buttons && template.buttons.length > 0) {
-    const buttons = template.buttons.map((btn, index) => {
-      const button = {
-        type: btn.type,
-        text: btn.text,
-      };
-      
-      if (btn.type === 'URL') {
-        button.url = btn.url;
-        if (extractVariableIndices(btn.url).length > 0) {
-          button.example = btn.example ? [btn.example] : [];
-        }
-      } else if (btn.type === 'PHONE_NUMBER') {
-        button.phone_number = btn.phoneNumber;
-      } else if (btn.type === 'COPY_CODE') {
-        button.example = btn.example ? [btn.example] : [];
-      } else if (btn.type === 'FLOW') {
-        button.flow_id = btn.flowId;
-        button.flow_action = btn.flowAction || 'NAVIGATE';
-      } else if (btn.type === 'CATALOG') {
-        button.catalog_id = btn.catalogId;
-        button.product_retailer_id = btn.productRetailerId;
-      }
-      
-      return button;
-    });
-    
-    components.push({ type: 'BUTTONS', buttons });
+    components.push({ type: 'BUTTONS', buttons: template.buttons.map(buildMetaButton) });
   }
 
   return {
@@ -128,6 +124,64 @@ export function buildTemplatePayload(template) {
     language: template.language,
     components,
   };
+}
+
+function buildHeaderComponent(template) {
+  if (!template.headerType || template.headerType === 'none') return null;
+
+  if (template.headerType === 'text') {
+    const component = { type: 'HEADER', format: 'TEXT', text: template.headerContent };
+    if (template.sampleValues?.header?.length && extractVariableIndices(template.headerContent || '').length > 0) {
+      component.example = { header_text: [template.sampleValues.header[0]] };
+    }
+    return component;
+  }
+
+  const format = template.headerType.toUpperCase();
+  const component = { type: 'HEADER', format };
+  if (template.headerHandle) {
+    component.example = { header_handle: [template.headerHandle] };
+  } else if (template.headerMediaUrl) {
+    component.example = { header_url: [template.headerMediaUrl] };
+  } else {
+    throw new Error(`${format} header requires a media URL or an uploaded media handle`);
+  }
+  return component;
+}
+
+function buildBodyComponent(template) {
+  const body = { type: 'BODY', text: template.bodyText };
+  const varCount = extractVariableIndices(template.bodyText).length;
+  if (varCount > 0 && template.sampleValues?.body?.length) {
+    body.example = { body_text: [template.sampleValues.body.slice(0, varCount)] };
+  }
+  return body;
+}
+
+function buildMetaButton(btn) {
+  const button = {
+    type: btn.type,
+    text: btn.text,
+  };
+
+  if (btn.type === 'URL') {
+    button.url = btn.url;
+    if (extractVariableIndices(btn.url || '').length > 0 && btn.example) {
+      button.example = [btn.example];
+    }
+  } else if (btn.type === 'PHONE_NUMBER') {
+    button.phone_number = btn.phoneNumber;
+  } else if (btn.type === 'COPY_CODE') {
+    if (btn.example) button.example = [btn.example];
+  } else if (btn.type === 'FLOW') {
+    button.flow_id = btn.flowId;
+    button.flow_action = btn.flowAction || 'NAVIGATE';
+  } else if (btn.type === 'CATALOG') {
+    button.catalog_id = btn.catalogId;
+    button.product_retailer_id = btn.productRetailerId;
+  }
+
+  return button;
 }
 
 export function buildSendComponents(template, params = {}) {

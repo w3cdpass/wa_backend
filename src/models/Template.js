@@ -12,6 +12,13 @@ const templateButtonSchema = new mongoose.Schema({
   productRetailerId: String,
 }, { _id: false });
 
+const templateCardSchema = new mongoose.Schema({
+  headerMediaUrl: String,
+  headerHandle: String,
+  bodyText: { type: String, default: '' },
+  buttons: [templateButtonSchema],
+}, { _id: false });
+
 const templateSchema = new mongoose.Schema({
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },
   metaTemplateId: { type: String, unique: true, sparse: true },
@@ -26,6 +33,8 @@ const templateSchema = new mongoose.Schema({
   bodyText: { type: String, required: true },
   footerText: String,
   buttons: [templateButtonSchema],
+  cards: [templateCardSchema],
+  templateType: { type: String, enum: ['standard', 'media', 'carousel', 'authentication'], default: 'standard' },
   sampleValues: {
     body: [String],
     header: [String],

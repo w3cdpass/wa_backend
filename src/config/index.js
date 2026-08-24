@@ -40,6 +40,7 @@ export const config = {
       businessAccountId: process.env.META_BUSINESS_ACCOUNT_ID,
       wabaId: process.env.META_WABA_ID,
       appSecret: process.env.META_APP_SECRET,
+      appId: process.env.META_APP_ID,
       apiVersion: process.env.META_API_VERSION || 'v21.0',
     },
   },

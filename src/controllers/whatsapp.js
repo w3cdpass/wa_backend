@@ -36,6 +36,15 @@ export const connectWaController = async (req, res, next) => {
   try {
     const result = await whatsAppConfigService.testConnection(req.tenantId);
     if (!result.success) throw new AppError(result.error || 'Connection failed', 400, 'WA_CONNECT_FAILED');
+
+    // Best-effort template import so the catalog is populated immediately
+    let templateSync = null;
+    try {
+      templateSync = await templateService.syncFromMeta(req.tenantId);
+    } catch (e) {
+      console.warn('Post-connect template sync failed:', e.message);
+    }
+
     const masked = await whatsAppConfigService.getMaskedConfig(req.tenantId);
     res.json({
       message: 'WhatsApp connected successfully',
@@ -47,6 +56,7 @@ export const connectWaController = async (req, res, next) => {
         status: masked?.status,
       },
       config: masked,
+      templateSync,
     });
   } catch (error) {
     next(error);
@@ -99,6 +109,60 @@ export const listTemplatesController = async (req, res, next) => {
     if (search) filter.name = { $regex: String(search).toLowerCase(), $options: 'i' };
     const templates = await templateService.getTemplates(req.tenantId, filter);
     res.json({ templates, total: templates.length });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getTemplateController = async (req, res, next) => {
+  try {
+    const template = await templateService.getTemplate(req.params.id, req.tenantId);
+    if (!template) throw new AppError('Template not found', 404);
+    res.json(template);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const stripMetaOnly = (data) => ({
+  ...data,
+  headerHandle: undefined,
+  cards: data.cards?.map(({ headerHandle, ...rest }) => rest),
+});
+
+export const createTemplateController = async (req, res, next) => {
+  try {
+    const template = await templateService.createTemplate(req.tenantId, req.body);
+    res.status(201).json(template);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateTemplateController = async (req, res, next) => {
+  try {
+    const template = await templateService.updateTemplate(req.params.id, req.tenantId, stripMetaOnly(req.body));
+    res.json(template);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteTemplateController = async (req, res, next) => {
+  try {
+    await templateService.deleteTemplate(req.params.id, req.tenantId);
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const submitTemplateController = async (req, res, next) => {
+  try {
+    // Upload media handles first — Meta rejects plain URLs for image headers
+    await templateService.ensureMediaHandles(req.params.id, req.tenantId);
+    const template = await templateService.submitToMeta(req.params.id, req.tenantId);
+    res.json({ message: 'Template submitted to Meta for approval', template });
   } catch (error) {
     next(error);
   }

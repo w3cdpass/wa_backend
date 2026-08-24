@@ -37,6 +37,7 @@ class MetaAPIError extends Error {
     this.code = code;
     this.subCode = subCode;
     this.httpStatus = httpStatus;
+    this.statusCode = httpStatus; // consumed by the global error handler
     this.data = data;
     this.isRetryable = [131009, 131026, 131047].includes(code);
     this.isPermanent = [131001, 131002, 131003, 131005, 131027, 132000].includes(code);
