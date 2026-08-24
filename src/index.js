@@ -1,4 +1,6 @@
 import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -34,6 +36,12 @@ app.use(morgan(config.nodeEnv === 'development' ? 'dev' : 'combined'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
+
+// Serve public assets (template header images etc.) at the site root
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.use(express.static(path.join(__dirname, '../public'), {
+  maxAge: '1d',
+}));
 
 const authLimiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
