@@ -264,9 +264,15 @@ export const sendTestTemplateController = async (req, res, next) => {
       ? sampleBody
       : Array.from({ length: varCount }, (_, i) => sampleBody[i] || `Test value ${i + 1}`);
 
-    const components = buildSendComponents(template, {
-      body: bodyValues,
-    });
+    let components;
+    try {
+      components = buildSendComponents(template, { body: bodyValues });
+    } catch (buildErr) {
+      console.warn('[sendTestTemplate] buildSendComponents fallback:', buildErr.message);
+      components = varCount > 0
+        ? [{ type: 'body', parameters: bodyValues.map((v) => ({ type: 'text', text: String(v) })) }]
+        : [];
+    }
 
     const { createMessageAPI } = await import('../modules/meta/index.js');
     const messageAPI = createMessageAPI(config.accessToken);
