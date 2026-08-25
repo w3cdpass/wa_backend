@@ -243,15 +243,16 @@ export class FlowEngine {
         break;
 
       case NODE_TYPES.SEND_TEMPLATE: {
-        // On first visit: send the template. On button tap: find the edge
-        // matching the tapped button's output index and advance.
         if (message.kind === 'interactive_reply' && this.canAdvanceFromSuspending(node, message)) {
           const btnIndex = this.findTemplateButtonIndex(node, message);
           nextNodeKey = this.getNextNodeKey(flow, node.nodeKey, btnIndex);
-          // Store which button was tapped in variables
           await FlowRun.findByIdAndUpdate(run._id, {
             $set: { [`variables._button_${btnIndex}`]: message.replyTitle || message.replyId },
           });
+        } else if (run.lastPromptNodeKey === node.nodeKey) {
+          // Template already sent — user typed text instead of tapping a button.
+          // Route to first output (default path).
+          nextNodeKey = this.getNextNodeKey(flow, node.nodeKey, 0);
         } else {
           await this.executeSendTemplate(flow, run, node, message);
           outcome = 'suspended';
