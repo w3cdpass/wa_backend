@@ -155,17 +155,21 @@ router.post('/:id/send', async (req, res, next) => {
           });
           if (!template) throw new Error(`Template "${startNode.config.templateName}" not found`);
 
-          const bodyParams = (template.sampleValues?.body || []).map((val) => ({
-            type: 'text',
-            text: String(val || ''),
-          }));
+          let components;
+          try {
+            const { buildSendComponents } = await import('../modules/meta/template.js');
+            components = buildSendComponents(template, { body: [] });
+          } catch (buildErr) {
+            console.warn('[flows/send] buildSendComponents fallback:', buildErr.message);
+            components = [];
+          }
 
           const result = await messageAPI.sendTemplate({
             phoneNumberId: config.phoneNumberId,
             to: contact.phone,
             templateName: template.name,
             language: template.language,
-            components: bodyParams.length ? [{ type: 'body', parameters: bodyParams }] : [],
+            ...(components.length ? { components } : {}),
           });
 
           if (result && result.messages) {

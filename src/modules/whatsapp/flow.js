@@ -458,18 +458,21 @@ export class FlowEngine {
 
     const messageAPI = this.getMessageAPI(config.accessToken);
 
-    // Build variable parameters from context
-    const bodyParams = (template.sampleValues?.body || []).map((val, i) => {
-      const varValue = run.variables[`body_${i}`] || run.variables[`${i + 1}`] || val || '';
-      return { type: 'text', text: String(varValue) };
-    });
+    let components;
+    try {
+      const { buildSendComponents } = await import('../meta/template.js');
+      components = buildSendComponents(template, { body: [] });
+    } catch (buildErr) {
+      console.warn('[executeSendTemplate] buildSendComponents fallback:', buildErr.message);
+      components = [];
+    }
 
     const result = await messageAPI.sendTemplate({
       phoneNumberId: config.phoneNumberId,
       to: contact.phone,
       templateName: template.name,
       language: template.language,
-      components: bodyParams.length ? [{ type: 'body', parameters: bodyParams }] : [],
+      ...(components.length ? { components } : {}),
     });
 
     if (!result || !result.messages) throw new Error('Template send failed: no message ID returned');
