@@ -1,5 +1,6 @@
 import { whatsAppConfigService } from '../modules/whatsapp/config.js';
 import { templateService } from '../modules/whatsapp/template.js';
+import { listSubscribedApps, subscribeAppToWaba } from '../modules/meta/subscriptions.js';
 import { config } from '../config/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { checkTemplateCompliance } from '../utils/templateCompliance.js';
@@ -172,6 +173,37 @@ export const checkComplianceController = async (req, res, next) => {
   try {
     const report = checkTemplateCompliance(req.body);
     res.json(report);
+  } catch (error) {
+    next(normalizeTemplateError(error));
+  }
+};
+
+// Instant template-status webhooks, enabled from inside the app with the
+// stored token — no Meta dashboard access required.
+const requireWaConfig = async (tenantId) => {
+  const cfg = await whatsAppConfigService.getConfig(tenantId);
+  if (!cfg?.accessToken || !cfg?.wabaId) {
+    throw new AppError('Save your WhatsApp credentials first (access token + WABA ID)', 400);
+  }
+  return cfg;
+};
+
+export const getWebhookSubscriptionController = async (req, res, next) => {
+  try {
+    const cfg = await requireWaConfig(req.tenantId);
+    const apps = await listSubscribedApps(cfg.wabaId, cfg.accessToken);
+    res.json({ subscribed: apps.length > 0, apps });
+  } catch (error) {
+    next(normalizeTemplateError(error));
+  }
+};
+
+export const subscribeWebhookController = async (req, res, next) => {
+  try {
+    const cfg = await requireWaConfig(req.tenantId);
+    await subscribeAppToWaba(cfg.wabaId, cfg.accessToken);
+    const apps = await listSubscribedApps(cfg.wabaId, cfg.accessToken);
+    res.json({ success: true, subscribed: apps.length > 0, apps });
   } catch (error) {
     next(normalizeTemplateError(error));
   }

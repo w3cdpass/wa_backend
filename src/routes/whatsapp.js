@@ -13,6 +13,8 @@ import {
   deleteTemplateController,
   submitTemplateController,
   checkComplianceController,
+  getWebhookSubscriptionController,
+  subscribeWebhookController,
 } from '../controllers/whatsapp.js';
 import { authenticate } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -44,6 +46,8 @@ router.post('/connect', connectWaController);
 router.post('/disconnect', disconnectWaController);
 
 router.get('/webhook-info', getWebhookInfoController);
+router.get('/webhook/subscription', getWebhookSubscriptionController);
+router.post('/webhook/subscription', subscribeWebhookController);
 
 // Templates
 router.post('/templates/sync', syncTemplatesController);
