@@ -258,8 +258,14 @@ export const sendTestTemplateController = async (req, res, next) => {
     const template = await Template.findOne({ _id: templateId, tenantId: req.tenantId });
     if (!template) throw new AppError('Template not found', 404);
 
+    const sampleBody = template.sampleValues?.body || [];
+    const varCount = (template.bodyText || '').match(/\{\{\d+\}\}/g)?.length || 0;
+    const bodyValues = sampleBody.length >= varCount
+      ? sampleBody
+      : Array.from({ length: varCount }, (_, i) => sampleBody[i] || `Test value ${i + 1}`);
+
     const components = buildSendComponents(template, {
-      body: template.sampleValues?.body,
+      body: bodyValues,
     });
 
     const { createMessageAPI } = await import('../modules/meta/index.js');
