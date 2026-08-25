@@ -4,6 +4,8 @@ import { listSubscribedApps, subscribeAppToWaba } from '../modules/meta/subscrip
 import { config } from '../config/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { checkTemplateCompliance } from '../utils/templateCompliance.js';
+import { WhatsAppConfig } from '../models/WhatsAppConfig.js';
+import { decrypt } from '../utils/encryption.js';
 
 export const getWaConfigController = async (req, res, next) => {
   try {
@@ -181,11 +183,16 @@ export const checkComplianceController = async (req, res, next) => {
 // Instant template-status webhooks, enabled from inside the app with the
 // stored token — no Meta dashboard access required.
 const requireWaConfig = async (tenantId) => {
-  const cfg = await whatsAppConfigService.getConfig(tenantId);
-  if (!cfg?.accessToken || !cfg?.wabaId) {
-    throw new AppError('Save your WhatsApp credentials first (access token + WABA ID)', 400);
-  }
-  return cfg;
+  // Bypass the config service (which may throw on missing fields) and read
+  // the raw encrypted document directly — the subscription API only needs
+  // the access token and WABA ID.
+  const raw = await WhatsAppConfig.findOne({ tenantId });
+  if (!raw) throw new AppError('No WhatsApp credentials saved — connect first.', 400);
+  const accessToken = raw.accessTokenEnc ? decrypt(raw.accessTokenEnc) : null;
+  if (!accessToken) throw new AppError('No access token saved — reconnect your account first.', 400);
+  const wabaId = raw.wabaId;
+  if (!wabaId) throw new AppError('No WABA ID saved — fill in the WABA ID field in settings.', 400);
+  return { accessToken, wabaId };
 };
 
 export const getWebhookSubscriptionController = async (req, res, next) => {
