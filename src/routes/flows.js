@@ -117,6 +117,12 @@ router.post('/:id/send', async (req, res, next) => {
       const startNode = flow.nodes[0];
       if (!startNode) throw new AppError('Flow has no nodes', 400);
 
+      // Close any existing active runs for this contact
+      await FlowRun.updateMany(
+        { tenantId: req.tenantId, contactId: contact._id, status: { $in: ['running', 'paused'] } },
+        { $set: { status: 'failed', error: 'Superseded by new run' } },
+      );
+
       // Create FlowRun
       const run = await FlowRun.create({
         flowId: flow._id,
