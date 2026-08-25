@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const flowNodeConfigSchema = new mongoose.Schema({
   nodeKey: { type: String, required: true },
-  nodeType: { type: String, enum: ['start', 'send_message', 'send_media', 'send_buttons', 'send_list', 'condition', 'collect_input', 'set_tag', 'handoff', 'end'], required: true },
+  nodeType: { type: String, required: true },
   config: { type: mongoose.Schema.Types.Mixed, default: {} },
   position: {
     x: { type: Number, default: 0 },
