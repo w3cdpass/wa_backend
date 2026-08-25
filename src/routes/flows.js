@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { Flow, FlowRun, Contact, Conversation, Template, WhatsAppConfig } from '../models/index.js';
+import { WhatsAppConfigService } from '../modules/whatsapp/config.js';
 import { flowEngine } from '../modules/whatsapp/flow.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createMessageAPI } from '../modules/meta/index.js';
 import { authenticate } from '../middleware/auth.js';
 
+const configService = new WhatsAppConfigService();
 const router = Router();
 router.use(authenticate);
 
@@ -80,8 +82,8 @@ router.post('/:id/send', async (req, res, next) => {
     const flow = await Flow.findOne({ _id: req.params.id, tenantId: req.tenantId });
     if (!flow) throw new AppError('Flow not found', 404);
 
-    const config = await WhatsAppConfig.findOne({ tenantId: req.tenantId });
-    if (!config?.accessToken || !config?.phoneNumberId) {
+      const config = await configService.getConfig(req.tenantId);
+      if (!config?.accessToken || !config?.phoneNumberId) {
       throw new AppError('WhatsApp not configured — save credentials first', 400);
     }
 
