@@ -136,7 +136,8 @@ router.post('/:id/send', async (req, res, next) => {
 
       // Execute the first node
       try {
-        if (startNode.nodeType === 'send_template') {
+        const nodeType = startNode.backendNodeType || startNode.nodeType;
+        if (nodeType === 'send_template') {
           const template = await Template.findOne({
             tenantId: req.tenantId,
             name: startNode.config.templateName,
@@ -161,13 +162,13 @@ router.post('/:id/send', async (req, res, next) => {
               lastPromptNodeKey: startNode.nodeKey,
             });
           }
-        } else if (startNode.nodeType === 'send_message') {
+        } else if (nodeType === 'send_message') {
           await messageAPI.sendText({
             phoneNumberId: config.phoneNumberId,
             to: contact.phone,
             text: startNode.config.text || '',
           });
-        } else if (startNode.nodeType === 'send_buttons') {
+        } else if (nodeType === 'send_buttons') {
           const buttons = (startNode.config.buttons || []).map(b => ({
             id: b.replyId,
             title: b.title,

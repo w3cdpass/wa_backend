@@ -20,13 +20,14 @@ const NODE_TYPES = {
 
 function matchReplyId(node, replyId) {
   if (!node.config) return null;
+  const nodeType = node.backendNodeType || node.nodeType;
   
-  if (node.nodeType === NODE_TYPES.SEND_BUTTONS) {
+  if (nodeType === NODE_TYPES.SEND_BUTTONS) {
     const hit = node.config.buttons?.find(b => b.replyId === replyId);
     return hit?.nextNodeKey || null;
   }
   
-  if (node.nodeType === NODE_TYPES.SEND_LIST) {
+  if (nodeType === NODE_TYPES.SEND_LIST) {
     for (const section of node.config.sections || []) {
       const hit = section.rows?.find(r => r.replyId === replyId);
       if (hit) return hit.nextNodeKey;
@@ -203,8 +204,11 @@ export class FlowEngine {
       await this.completeRun(run, 'failed', 'Node not found');
       return { consumed: true, outcome: 'failed' };
     }
+
+    // Resolve node type: prefer backendNodeType (mapped by frontend), fall back to nodeType
+    const nodeType = node.backendNodeType || node.nodeType;
     
-    if (isSuspending(node.nodeType)) {
+    if (isSuspending(nodeType)) {
       if (!this.canAdvanceFromSuspending(node, message, run)) {
         return { consumed: true, outcome: 'awaiting_input' };
       }
@@ -213,7 +217,7 @@ export class FlowEngine {
     let nextNodeKey = null;
     let outcome = 'advanced';
     
-    switch (node.nodeType) {
+    switch (nodeType) {
       case NODE_TYPES.START:
         nextNodeKey = this.getNextNodeKey(flow, node.nodeKey);
         break;
@@ -285,7 +289,7 @@ export class FlowEngine {
         lastActivityAt: new Date(),
       });
       
-      if (isAutoAdvancing(flow.nodes.find(n => n.nodeKey === nextNodeKey)?.nodeType)) {
+      if (isAutoAdvancing(flow.nodes.find(n => n.nodeKey === nextNodeKey)?.backendNodeType || flow.nodes.find(n => n.nodeKey === nextNodeKey)?.nodeType)) {
         return this.advanceRun(
           await FlowRun.findById(run._id), 
           { kind: 'auto', text: '' }
@@ -302,23 +306,24 @@ export class FlowEngine {
 
   canAdvanceFromSuspending(node, message, run) {
     if (message.kind !== 'interactive_reply') return false;
+    const nodeType = node.backendNodeType || node.nodeType;
 
-    if (node.nodeType === NODE_TYPES.SEND_BUTTONS) {
+    if (nodeType === NODE_TYPES.SEND_BUTTONS) {
       return node.config.buttons?.some(b => b.replyId === message.replyId);
     }
 
-    if (node.nodeType === NODE_TYPES.SEND_LIST) {
+    if (nodeType === NODE_TYPES.SEND_LIST) {
       return node.config.sections?.some(s =>
         s.rows?.some(r => r.replyId === message.replyId)
       );
     }
 
     // Templates: any button tap advances the flow
-    if (node.nodeType === NODE_TYPES.SEND_TEMPLATE) {
+    if (nodeType === NODE_TYPES.SEND_TEMPLATE) {
       return true;
     }
 
-    if (node.nodeType === NODE_TYPES.COLLECT_INPUT) {
+    if (nodeType === NODE_TYPES.COLLECT_INPUT) {
       return true;
     }
 
