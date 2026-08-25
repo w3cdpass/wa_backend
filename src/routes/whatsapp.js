@@ -15,6 +15,7 @@ import {
   checkComplianceController,
   getWebhookSubscriptionController,
   subscribeWebhookController,
+  sendTestTemplateController,
 } from '../controllers/whatsapp.js';
 import { authenticate } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -58,5 +59,6 @@ router.get('/templates/:id', validate(templateIdParam), getTemplateController);
 router.put('/templates/:id', validate(updateTemplateSchema), updateTemplateController);
 router.delete('/templates/:id', validate(templateIdParam), deleteTemplateController);
 router.post('/templates/:id/submit', validate(templateIdParam), submitTemplateController);
+router.post('/templates/send-test', sendTestTemplateController);
 
 export default router;

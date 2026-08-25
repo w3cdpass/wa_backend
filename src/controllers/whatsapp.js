@@ -242,3 +242,36 @@ export const submitTemplateController = async (req, res, next) => {
     next(normalizeTemplateError(error));
   }
 };
+
+export const sendTestTemplateController = async (req, res, next) => {
+  try {
+    const { templateId, phone } = req.body;
+    if (!templateId || !phone) throw new AppError('templateId and phone are required', 400);
+
+    const config = await whatsAppConfigService.getConfig(req.tenantId);
+    if (!config?.accessToken || !config?.phoneNumberId) {
+      throw new AppError('WhatsApp not configured', 400);
+    }
+
+    const { Template } = await import('../models/index.js');
+    const template = await Template.findOne({ _id: templateId, tenantId: req.tenantId });
+    if (!template) throw new AppError('Template not found', 404);
+
+    const { createMessageAPI } = await import('../modules/meta/index.js');
+    const messageAPI = createMessageAPI(config.accessToken);
+
+    const cleanPhone = phone.replace(/[^\d]/g, '');
+
+    const result = await messageAPI.sendTemplate({
+      phoneNumberId: config.phoneNumberId,
+      to: cleanPhone,
+      templateName: template.name,
+      language: template.language || 'en_US',
+    });
+
+    res.json({ success: true, result, phone: cleanPhone, templateName: template.name });
+  } catch (error) {
+    console.error('[sendTestTemplate] error:', error.message);
+    next(error);
+  }
+};
