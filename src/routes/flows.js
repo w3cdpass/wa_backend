@@ -156,7 +156,7 @@ router.post('/:id/send', async (req, res, next) => {
             components: bodyParams.length ? [{ type: 'body', parameters: bodyParams }] : [],
           });
 
-          if (result.success) {
+          if (result && result.messages) {
             await FlowRun.findByIdAndUpdate(run._id, {
               lastPromptNodeKey: startNode.nodeKey,
             });

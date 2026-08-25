@@ -1,6 +1,7 @@
 import { Flow, FlowRun } from '../../models/index.js';
 import { MessageAPI, createMessageAPI } from '../meta/index.js';
 import { WhatsAppConfig } from '../../models/WhatsAppConfig.js';
+import { WhatsAppConfigService } from '../whatsapp/config.js';
 import { normalizePhone, phoneVariants } from '../../utils/phone.js';
 
 const NODE_TYPES = {
@@ -112,6 +113,7 @@ function evaluateCondition(variables, predicate) {
 export class FlowEngine {
   constructor() {
     this.messageAPICache = new Map();
+    this.configService = new WhatsAppConfigService();
   }
 
   getMessageAPI(accessToken) {
@@ -119,6 +121,19 @@ export class FlowEngine {
       this.messageAPICache.set(accessToken, createMessageAPI(accessToken));
     }
     return this.messageAPICache.get(accessToken);
+  }
+
+  async _getConfig(tenantId) {
+    const config = await this.configService.getConfig(tenantId);
+    if (!config) throw new Error('WhatsApp not configured');
+    return config;
+  }
+
+  async _getContactPhone(tenantId, contactId) {
+    const { Contact } = await import('../../models/index.js');
+    const contact = await Contact.findById(contactId);
+    if (!contact) throw new Error('Contact not found');
+    return contact.phone;
   }
 
   async dispatchInbound(input) {
@@ -322,24 +337,24 @@ export class FlowEngine {
   }
 
   async executeSendMessage(flow, run, node, message) {
-    const config = await WhatsAppConfig.findOne({ tenantId: run.tenantId });
-    if (!config) throw new Error('WhatsApp not configured');
+    const config = await this._getConfig(run.tenantId);
+    const phone = await this._getContactPhone(run.tenantId, run.contactId);
     
     const messageAPI = this.getMessageAPI(config.accessToken);
     const text = this.interpolateVariables(node.config.text || '', run.variables);
     
     const result = await messageAPI.sendText({
       phoneNumberId: config.phoneNumberId,
-      to: run.contactId, // This should be the contact's phone
+      to: phone,
       text,
     });
     
-    if (!result.success) throw new Error(result.error);
+    if (!result || !result.messages) throw new Error('Text send failed');
   }
 
   async executeSendMedia(flow, run, node, message) {
-    const config = await WhatsAppConfig.findOne({ tenantId: run.tenantId });
-    if (!config) throw new Error('WhatsApp not configured');
+    const config = await this._getConfig(run.tenantId);
+    const phone = await this._getContactPhone(run.tenantId, run.contactId);
     
     const messageAPI = this.getMessageAPI(config.accessToken);
     const mediaUrl = this.interpolateVariables(node.config.mediaUrl || '', run.variables);
@@ -347,18 +362,18 @@ export class FlowEngine {
     
     const result = await messageAPI.sendMedia({
       phoneNumberId: config.phoneNumberId,
-      to: run.contactId,
+      to: phone,
       type: node.config.mediaType || 'image',
       link: mediaUrl,
       caption,
     });
     
-    if (!result.success) throw new Error(result.error);
+    if (!result || !result.messages) throw new Error('Media send failed');
   }
 
   async executeSendButtons(flow, run, node, message) {
-    const config = await WhatsAppConfig.findOne({ tenantId: run.tenantId });
-    if (!config) throw new Error('WhatsApp not configured');
+    const config = await this._getConfig(run.tenantId);
+    const phone = await this._getContactPhone(run.tenantId, run.contactId);
     
     const messageAPI = this.getMessageAPI(config.accessToken);
     const body = this.interpolateVariables(node.config.body || '', run.variables);
@@ -377,20 +392,18 @@ export class FlowEngine {
     
     const result = await messageAPI.sendInteractive({
       phoneNumberId: config.phoneNumberId,
-      to: run.contactId,
+      to: phone,
       type: 'button',
       body,
       header,
       footer,
       action: buttons,
     });
-    
-    if (!result.success) throw new Error(result.error);
   }
 
   async executeSendList(flow, run, node, message) {
-    const config = await WhatsAppConfig.findOne({ tenantId: run.tenantId });
-    if (!config) throw new Error('WhatsApp not configured');
+    const config = await this._getConfig(run.tenantId);
+    const phone = await this._getContactPhone(run.tenantId, run.contactId);
     
     const messageAPI = this.getMessageAPI(config.accessToken);
     const body = this.interpolateVariables(node.config.body || '', run.variables);
@@ -414,24 +427,28 @@ export class FlowEngine {
     
     const result = await messageAPI.sendInteractive({
       phoneNumberId: config.phoneNumberId,
-      to: run.contactId,
+      to: phone,
       type: 'list',
       body,
       header,
       footer,
       action: { button: buttonLabel, sections },
     });
-    
-    if (!result.success) throw new Error(result.error);
   }
 
   async executeSendTemplate(flow, run, node, message) {
-    const config = await WhatsAppConfig.findOne({ tenantId: run.tenantId });
+    const { WhatsAppConfig } = await import('../../models/index.js');
+    const { WhatsAppConfigService } = await import('../whatsapp/config.js');
+    const configService = new WhatsAppConfigService();
+    const config = await configService.getConfig(run.tenantId);
     if (!config) throw new Error('WhatsApp not configured');
 
-    const { Template } = await import('../../models/index.js');
+    const { Template, Contact } = await import('../../models/index.js');
     const template = await Template.findOne({ tenantId: run.tenantId, name: node.config.templateName });
     if (!template) throw new Error(`Template "${node.config.templateName}" not found`);
+
+    const contact = await Contact.findById(run.contactId);
+    if (!contact) throw new Error('Contact not found');
 
     const messageAPI = this.getMessageAPI(config.accessToken);
 
@@ -443,13 +460,13 @@ export class FlowEngine {
 
     const result = await messageAPI.sendTemplate({
       phoneNumberId: config.phoneNumberId,
-      to: run.contactId,
+      to: contact.phone,
       templateName: template.name,
       language: template.language,
       components: bodyParams.length ? [{ type: 'body', parameters: bodyParams }] : [],
     });
 
-    if (!result.success) throw new Error(result.error || 'Template send failed');
+    if (!result || !result.messages) throw new Error('Template send failed: no message ID returned');
 
     // Store template info for button matching
     const buttons = (template.buttons || []).map((b, i) => ({
@@ -527,13 +544,6 @@ export class FlowEngine {
     return text.replace(/\{\{(\w+)\}\}/g, (match, key) => {
       return variables[key] !== undefined ? String(variables[key]) : match;
     });
-  }
-
-  getMessageAPI(accessToken) {
-    if (!this.messageAPICache.has(accessToken)) {
-      this.messageAPICache.set(accessToken, createMessageAPI(accessToken));
-    }
-    return this.messageAPICache.get(accessToken);
   }
 }
 
