@@ -1,5 +1,6 @@
 import { whatsAppConfigService } from '../modules/whatsapp/config.js';
 import { templateService } from '../modules/whatsapp/template.js';
+import { buildSendComponents } from '../modules/meta/template.js';
 import { listSubscribedApps, subscribeAppToWaba } from '../modules/meta/subscriptions.js';
 import { config } from '../config/index.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -257,6 +258,10 @@ export const sendTestTemplateController = async (req, res, next) => {
     const template = await Template.findOne({ _id: templateId, tenantId: req.tenantId });
     if (!template) throw new AppError('Template not found', 404);
 
+    const components = buildSendComponents(template, {
+      body: template.sampleValues?.body,
+    });
+
     const { createMessageAPI } = await import('../modules/meta/index.js');
     const messageAPI = createMessageAPI(config.accessToken);
 
@@ -267,6 +272,7 @@ export const sendTestTemplateController = async (req, res, next) => {
       to: cleanPhone,
       templateName: template.name,
       language: template.language || 'en_US',
+      components: components.length > 0 ? components : undefined,
     });
 
     res.json({ success: true, result, phone: cleanPhone, templateName: template.name });
