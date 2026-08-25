@@ -49,15 +49,12 @@ export class TemplateService {
     const template = await Template.findOne({ _id: templateId, tenantId });
     if (!template) throw new Error('Template not found');
 
-    // Best-effort: Meta prefers example.header_handle (uploaded bytes), but
-    // example.header_url is still accepted at creation — so an upload failure
-    // (missing META_APP_ID, transient Graph error) must NOT block submission.
-    try {
-      await ensureHeaderHandle(template, config.accessToken);
-      await template.save();
-    } catch (err) {
-      console.warn('[template] header handle upload skipped:', err.message);
-    }
+    // Meta no longer accepts plain URLs for media-header samples — the bytes
+    // must be uploaded and referenced by handle. Any failure here (broken URL,
+    // wrong format, missing META_APP_ID) means Meta would reject the template,
+    // so surface the exact reason instead of submitting doomed requests.
+    await ensureHeaderHandle(template, config.accessToken);
+    await template.save();
     return template;
   }
 
@@ -212,9 +209,23 @@ export class TemplateService {
     return true;
   }
 
-  async getTemplates(tenantId, filter = {}) {
-    const query = { tenantId, ...filter };
-    return Template.find(query).sort({ createdAt: -1 });
+  async getTemplates(tenantId, filter = {}, options = {}) {
+    const where = { tenantId, ...filter };
+    if (options.search) {
+      const rx = { $regex: String(options.search).toLowerCase(), $options: 'i' };
+      where.$or = [{ name: rx }, { bodyText: rx }];
+    }
+
+    // Legacy callers omit page and get the full array; ?page= switches to
+    // paginated shape { templates, pagination }.
+    const page = Math.max(parseInt(options.page, 10) || 1, 1);
+    const limit = Math.min(parseInt(options.limit || 10, 10) || 10, 100);
+    const skip = (page - 1) * limit;
+    const [templates, total] = await Promise.all([
+      Template.find(where).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Template.countDocuments(where),
+    ]);
+    return { templates, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 } };
   }
 
   async getTemplate(templateId, tenantId) {

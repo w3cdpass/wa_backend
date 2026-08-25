@@ -2,6 +2,7 @@ import { whatsAppConfigService } from '../modules/whatsapp/config.js';
 import { templateService } from '../modules/whatsapp/template.js';
 import { config } from '../config/index.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { checkTemplateCompliance } from '../utils/templateCompliance.js';
 
 export const getWaConfigController = async (req, res, next) => {
   try {
@@ -102,13 +103,12 @@ export const syncTemplatesController = async (req, res, next) => {
 
 export const listTemplatesController = async (req, res, next) => {
   try {
-    const { status, category, search } = req.query;
+    const { status, category, search, page, limit } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (category) filter.category = category;
-    if (search) filter.name = { $regex: String(search).toLowerCase(), $options: 'i' };
-    const templates = await templateService.getTemplates(req.tenantId, filter);
-    res.json({ templates, total: templates.length });
+    const result = await templateService.getTemplates(req.tenantId, filter, { search, page, limit });
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -167,12 +167,38 @@ export const deleteTemplateController = async (req, res, next) => {
   }
 };
 
+// Best-practices gate before spending a review attempt with Meta.
+export const checkComplianceController = async (req, res, next) => {
+  try {
+    const report = checkTemplateCompliance(req.body);
+    res.json(report);
+  } catch (error) {
+    next(normalizeTemplateError(error));
+  }
+};
+
 export const submitTemplateController = async (req, res, next) => {
   try {
+    const existing = await templateService.getTemplate(req.params.id, req.tenantId);
+    if (!existing) throw new AppError('Template not found', 404);
+    if (existing.status === 'PENDING') throw new AppError('Template is already pending review and locked by Meta', 400);
+
+    const report = checkTemplateCompliance(existing);
+    if (!report.passed) {
+      throw new AppError(
+        `Fix these issues before submitting to Meta: ${report.errors.map((e) => e.message).join(' | ')}`,
+        400,
+      );
+    }
+
     // Upload media handles first — Meta rejects plain URLs for image headers
     await templateService.ensureMediaHandles(req.params.id, req.tenantId);
     const template = await templateService.submitToMeta(req.params.id, req.tenantId);
-    res.json({ message: 'Template submitted to Meta for approval', template });
+    res.json({
+      message: 'Template submitted to Meta for approval',
+      template,
+      review: { warnings: report.warnings, tips: report.tips },
+    });
   } catch (error) {
     next(normalizeTemplateError(error));
   }

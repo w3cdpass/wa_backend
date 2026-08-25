@@ -3,11 +3,30 @@ import { config } from '../../config/index.js';
 const META_API_VERSION = config.whatsapp.meta.apiVersion || 'v21.0';
 const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
 
-/**
- * Meta requires an `example.header_handle` (from the Resumable Upload API)
- * for IMAGE/VIDEO/DOCUMENT headers — a plain URL is rejected at creation.
- * This uploads the bytes and returns the handle.
- */
+// Meta no longer accepts plain URLs for media-header samples at template
+// creation — example.header_handle MUST come from the Resumable Upload API,
+// which requires a Meta App ID.
+const MEDIA_SPECS = {
+  image: {
+    mimes: ['image/jpeg', 'image/png'],
+    maxBytes: 5 * 1024 * 1024,
+    label: 'JPEG or PNG, max 5 MB',
+    extFor: (mime) => (mime === 'image/png' ? '.png' : '.jpg'),
+  },
+  video: {
+    mimes: ['video/mp4'],
+    maxBytes: 16 * 1024 * 1024,
+    label: 'MP4, max 16 MB',
+    extFor: () => '.mp4',
+  },
+  document: {
+    mimes: ['application/pdf'],
+    maxBytes: 100 * 1024 * 1024,
+    label: 'PDF, max 100 MB',
+    extFor: () => '.pdf',
+  },
+};
+
 async function readMetaError(res) {
   let body = '';
   try {
@@ -22,11 +41,9 @@ async function readMetaError(res) {
 export async function uploadResumableMedia({ accessToken, fileName, mimeType, bytes }) {
   const appId = config.whatsapp.meta.appId;
   if (!appId) {
-    const err = new Error(
-      'META_APP_ID is not set in backend env — cannot pre-upload media handles (will fall back to public URL).'
+    throw new Error(
+      'META_APP_ID is not configured on this server. Media headers (image/video/document) require uploading the sample to Meta via its Resumable Upload API, which needs a Meta App ID. Add META_APP_ID to the backend environment variables.'
     );
-    err.code = 'NO_APP_ID';
-    throw err;
   }
 
   const startParams = new URLSearchParams({
@@ -61,56 +78,70 @@ export async function uploadResumableMedia({ accessToken, fileName, mimeType, by
   return { handle: uploadData.h };
 }
 
-const IMAGE_TYPES = ['image/jpeg', 'image/png'];
-const IMAGE_MAX = 5 * 1024 * 1024;
-const VIDEO_TYPES = ['video/mp4'];
-const VIDEO_MAX = 30 * 1024 * 1024;
-
 /**
- * Ensures template.headerHandle (or card.headerHandle) exists by
- * downloading headerMediaUrl and uploading to Meta. Image-only parity
- * with wacrm; video/doc follow same shape when Meta accepts them here.
+ * Ensures template.headerHandle (and each carousel card's headerHandle)
+ * exists by downloading headerMediaUrl and uploading the bytes to Meta.
+ * Throws precise, user-fixable errors — Meta rejects templates whose sample
+ * asset cannot be verified, so failing early beats a doomed submission.
  */
 export async function ensureHeaderHandle(template, accessToken) {
   const targets = [];
   if (template.headerType && !['none', 'text'].includes(template.headerType)) {
-    targets.push(template);
+    targets.push({ ref: template, type: template.headerType });
   }
-  (template.cards || []).forEach((card) => targets.push(card));
+  (template.cards || []).forEach((card) => targets.push({ ref: card, type: 'image' }));
 
-  for (const target of targets) {
-    const isCard = target !== template;
-    const type = isCard ? 'image' : template.headerType;
-    if (type !== 'image') continue;
+  for (const { ref: target, type } of targets) {
+    if (!MEDIA_SPECS[type]) continue;
     if (target.headerHandle || !target.headerMediaUrl) continue;
+
+    const spec = MEDIA_SPECS[type];
 
     let res;
     try {
-      res = await fetch(target.headerMediaUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+      res = await fetch(target.headerMediaUrl, { redirect: 'follow', signal: AbortSignal.timeout(20000) });
     } catch {
-      throw new Error('Could not fetch the header image URL. Make sure it is publicly reachable.');
+      throw new Error(
+        `Could not download the ${type} from "${target.headerMediaUrl}". Check the URL — it must be complete and publicly reachable.`
+      );
     }
     if (!res.ok) {
-      throw new Error(`Header image URL returned ${res.status}. It must be publicly reachable.`);
-    }
-
-    const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (contentType && !IMAGE_TYPES.includes(contentType)) {
-      throw new Error(`Header images must be JPEG or PNG (got ${contentType}).`);
-    }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (!bytes.byteLength) throw new Error('Header image is empty.');
-    if (bytes.byteLength > IMAGE_MAX) {
       throw new Error(
-        `Header image is ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB — Meta's limit is 5 MB.`
+        `The ${type} URL "${target.headerMediaUrl}" returned HTTP ${res.status}. Fix the URL (it looks truncated or expired) and try again.`
       );
     }
 
-    const mimeType = IMAGE_TYPES.includes(contentType) ? contentType : 'image/jpeg';
+    let contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    const urlPath = (() => {
+      try { return new URL(target.headerMediaUrl).pathname.toLowerCase(); } catch { return ''; }
+    })();
+
+    // Some CDNs serve generic content types — infer from the extension.
+    if (!spec.mimes.includes(contentType)) {
+      if (urlPath.endsWith('.jpg') || urlPath.endsWith('.jpeg')) contentType = 'image/jpeg';
+      else if (urlPath.endsWith('.png')) contentType = 'image/png';
+      else if (urlPath.endsWith('.mp4')) contentType = 'video/mp4';
+      else if (urlPath.endsWith('.pdf')) contentType = 'application/pdf';
+    }
+
+    if (!spec.mimes.includes(contentType)) {
+      throw new Error(
+        `The ${type} header must be ${spec.label} (got "${contentType || 'unknown type'}" from "${target.headerMediaUrl}").`
+      );
+    }
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!bytes.byteLength) throw new Error(`The ${type} at "${target.headerMediaUrl}" is empty.`);
+    if (bytes.byteLength > spec.maxBytes) {
+      throw new Error(
+        `The ${type} is ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB — Meta's limit is ${(spec.maxBytes / 1024 / 1024).toFixed(0)} MB (${spec.label}).`
+      );
+    }
+
     const { handle } = await uploadResumableMedia({
       accessToken,
-      fileName: mimeType === 'image/png' ? 'header.png' : 'header.jpg',
-      mimeType,
+      fileName: `header${spec.extFor(contentType)}`,
+      mimeType: contentType,
       bytes,
     });
     target.headerHandle = handle;

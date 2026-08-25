@@ -20,6 +20,9 @@ const broadcastSchema = new mongoose.Schema({
   },
   scheduleAt: Date,
   variables: [broadcastVariableSchema],
+  // Position bindings chosen at compose time:
+  // { body: [{ position, mode: 'variable'|'fixed', variableId, value }], header: { mode, variableId, value } }
+  bindings: mongoose.Schema.Types.Mixed,
   stats: {
     total: { type: Number, default: 0 },
     sent: { type: Number, default: 0 },

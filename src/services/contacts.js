@@ -196,3 +196,7 @@ export const deleteGroup = async (tenantId, id) => {
   await ContactGroup.findByIdAndDelete(id);
   return { success: true };
 };
+
+export async function listTags(tenantId) {
+  return Contact.distinct('tags', { tenantId });
+}

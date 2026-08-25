@@ -12,6 +12,7 @@ import {
   getGroupController,
   updateGroupController,
   deleteGroupController,
+  listContactTagsController,
 } from '../controllers/contacts.js';
 import { authenticate } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -36,6 +37,7 @@ router.post('/bulk-import', bulkImportContactsController);
 router.post('/bulk-delete', validate(bulkDeleteContactsSchema), bulkDeleteContactsController);
 
 router.get('/groups', validate(listGroupsSchema), listGroupsController);
+router.get('/tags', listContactTagsController);
 router.post('/groups', validate(createGroupSchema), createGroupController);
 
 router.get('/:id', validate(contactIdParam), getContactController);

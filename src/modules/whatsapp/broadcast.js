@@ -1,4 +1,7 @@
 import { Broadcast, BroadcastRecipient } from '../../models/index.js';
+import { Contact } from '../../models/Contact.js';
+import { TemplateVariable } from '../../models/TemplateVariable.js';
+import { whatsAppConfigService } from './config.js';
 import { MessageAPI, createMessageAPI } from '../meta/index.js';
 import { buildSendComponents } from '../meta/template.js';
 import { normalizePhone, phoneVariants } from '../../utils/phone.js';
@@ -73,6 +76,11 @@ export class BroadcastEngine {
       throw new Error('Template must be APPROVED to send broadcast');
     }
     
+    broadcast.whatsappConfig = await whatsAppConfigService.getConfig(broadcast.tenantId);
+    if (!broadcast.whatsappConfig?.phoneNumberId) {
+      throw new Error('WhatsApp is not connected for this account');
+    }
+    
     await this.buildRecipients(broadcast);
     
     await Broadcast.findByIdAndUpdate(broadcastId, { 
@@ -84,58 +92,73 @@ export class BroadcastEngine {
   }
 
   async buildRecipients(broadcast) {
-    let contactIds = [];
-    
+    const where = {
+      tenantId: broadcast.tenantId,
+      optInStatus: 'opted_in',
+      isBlocked: { $ne: true },
+    };
     if (broadcast.audience.type === 'list') {
-      contactIds = broadcast.audience.contactIds || [];
+      where._id = { $in: broadcast.audience.contactIds || [] };
+      if (!broadcast.audience.contactIds?.length) throw new Error('No recipients selected');
     } else if (broadcast.audience.type === 'tags') {
-      const contacts = await Contact.find({ 
-        tenantId: broadcast.tenantId, 
-        tags: { $in: broadcast.audience.tagIds },
-        optInStatus: 'opted_in',
-      }).select('_id');
-      contactIds = contacts.map(c => c._id);
-    } else if (broadcast.audience.type === 'all') {
-      const contacts = await Contact.find({ 
-        tenantId: broadcast.tenantId,
-        optInStatus: 'opted_in',
-      }).select('_id');
-      contactIds = contacts.map(c => c._id);
+      where.tags = { $in: broadcast.audience.tagIds || [] };
     }
-    
-    const contacts = await Contact.find({ _id: { $in: contactIds } }).select('_id phone name');
-    
-    const recipients = contacts.map(contact => {
-      const vars = broadcast.variables?.find(v => v.contactId?.toString() === contact._id.toString()) || {};
-      return {
-        broadcastId: broadcast._id,
-        contactId: contact._id,
-        phone: normalizePhone(contact.phone),
-        variables: {
-          body: vars.body || [],
-          header: vars.header,
-          buttons: vars.buttons,
-        },
-        status: 'pending',
-      };
-    });
-    
+
+    const contacts = await Contact.find(where).select('_id phone name customFields tags');
+
+    // Resolve position bindings per contact at build time so each recipient
+    // row carries its final body/header values.
+    const bindings = broadcast.bindings || {};
+    const bodyBindings = [...(bindings.body || [])].sort((a, b) => a.position - b.position);
+    const varIds = [...new Set(
+      [...bodyBindings, bindings.header]
+        .filter((bnd) => bnd?.mode === 'variable' && bnd.variableId)
+        .map((bnd) => String(bnd.variableId))
+    )];
+    const varDocs = await TemplateVariable.find({ _id: { $in: varIds }, tenantId: broadcast.tenantId });
+    const varMap = new Map(varDocs.map((v) => [String(v._id), v]));
+
+    const resolveBinding = (binding, contact) => {
+      if (!binding) return undefined;
+      if (binding.mode === 'fixed') return String(binding.value ?? '');
+      return TemplateVariable.resolve(varMap.get(String(binding.variableId)), contact);
+    };
+
+    const recipients = contacts.map((contact) => ({
+      broadcastId: broadcast._id,
+      contactId: contact._id,
+      phone: normalizePhone(contact.phone),
+      variables: {
+        body: bodyBindings.map((bnd) => resolveBinding(bnd, contact) ?? ''),
+        header: resolveBinding(bindings.header, contact),
+        buttons: undefined,
+      },
+      status: 'pending',
+    }));
+
     if (recipients.length === 0) {
-      throw new Error('No valid recipients found');
+      throw new Error('No opted-in contacts match this audience');
     }
-    
+
+    await BroadcastRecipient.deleteMany({ broadcastId: broadcast._id }); // idempotent restarts
     await BroadcastRecipient.insertMany(recipients);
-    
-    await Broadcast.findByIdAndUpdate(broadcast._id, { 
-      'stats.total': recipients.length 
+
+    await Broadcast.findByIdAndUpdate(broadcast._id, {
+      'stats.total': recipients.length,
+      'stats.sent': 0,
+      'stats.failed': 0,
     });
-    
+
     return recipients;
   }
 
   async processBroadcast(broadcastId) {
     const broadcast = await Broadcast.findById(broadcastId).populate('templateId');
     if (!broadcast) return;
+    
+    if (!broadcast.whatsappConfig) {
+      broadcast.whatsappConfig = await whatsAppConfigService.getConfig(broadcast.tenantId);
+    }
     
     const pendingRecipients = await BroadcastRecipient.find({ 
       broadcastId, 
@@ -152,9 +175,10 @@ export class BroadcastEngine {
     for (let i = 0; i < pendingRecipients.length; i += BATCH_SIZE) {
       const batch = pendingRecipients.slice(i, i + BATCH_SIZE);
       
-      if (!broadcast.whatsappConfig?.isInProcessingWindow()) {
-        const nextWindow = broadcast.whatsappConfig?.getNextWindowStart();
-        const delay = nextWindow.getTime() - Date.now();
+      const winCfg = broadcast.whatsappConfig;
+      if (typeof winCfg?.isInProcessingWindow === 'function' && !winCfg.isInProcessingWindow()) {
+        const nextWindow = winCfg.getNextWindowStart();
+        const delay = Math.max(nextWindow.getTime() - Date.now(), 60_000);
         console.log(`Outside processing window, rescheduling in ${Math.round(delay / 60000)} min`);
         setTimeout(() => this.processBroadcast(broadcastId), delay);
         return;
@@ -190,7 +214,12 @@ export class BroadcastEngine {
     await waitForRateLimit(phoneNumberId);
     
     try {
-      const components = buildSendComponents(template, recipient.variables);
+      const vars = recipient.variables || {};
+      const components = buildSendComponents(template, {
+        body: vars.body,
+        headerText: vars.header,
+        buttonParams: vars.buttons,
+      });
       
       const result = await messageAPI.sendTemplate({
         phoneNumberId,

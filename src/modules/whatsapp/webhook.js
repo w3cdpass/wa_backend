@@ -95,9 +95,22 @@ export class WebhookHandler {
           await this.processors.status(tenantId, value, status);
         }
       }
-      
-      if (value.template) {
-        await this.processors.template(tenantId, value.template);
+
+      // Template decisions arrive as field "message_template_status_update"
+      // with { event: APPROVED|REJECTED|..., message_template_id, ... } — NOT
+      // as value.template (that shape was wrong, so approvals were never applied).
+      const TEMPLATE_STATUS_FIELDS = ['message_template_status_update', 'template_status_update'];
+      if (
+        TEMPLATE_STATUS_FIELDS.includes(changes.field)
+        && (value.message_template_id || value.template_id)
+      ) {
+        await this.processors.template(tenantId, {
+          id: String(value.message_template_id ?? value.template_id),
+          name: value.message_template_name ?? value.name,
+          language: value.message_template_language ?? value.language,
+          status: value.event ?? value.status,
+          reason: value.reason,
+        });
       }
       
       await WebhookEvent.findByIdAndUpdate(webhookEvent._id, { processed: true });
@@ -265,21 +278,32 @@ export class WebhookHandler {
     await this.updateBroadcastStats(tenantId, metaMessageId, messageStatus);
   }
 
-  async processTemplate(tenantId, templateData) {
-    const { id, name, language, status, category, components, quality_score } = templateData;
-    
-    await Template.findOneAndUpdate(
-      { metaTemplateId: id, tenantId },
-      { 
-        $set: { 
-          status,
-          qualityScore: quality_score?.score || null,
-          components,
-          updatedAt: new Date(),
-        } 
-      },
-      { upsert: true }
-    );
+  async processTemplate(tenantId, templateData = {}) {
+    const status = String(templateData.status || '').toUpperCase();
+    const ALLOWED = ['PENDING', 'APPROVED', 'REJECTED', 'PAUSED', 'DISABLED', 'PENDING_DELETION', 'IN_APPEAL'];
+    if (!ALLOWED.includes(status)) return;
+
+    // Status events reference the Meta template id; fall back to name+language
+    const filter = templateData.id
+      ? { tenantId, metaTemplateId: String(templateData.id) }
+      : {
+          tenantId,
+          name: String(templateData.name || '').toLowerCase(),
+          language: templateData.language || undefined,
+        };
+
+    const set = {
+      status,
+      updatedAt: new Date(),
+      ...(status === 'REJECTED'
+        ? { rejectionReason: templateData.reason || 'Rejected by Meta — see Business Manager for details' }
+        : { rejectionReason: null }),
+    };
+
+    const updated = await Template.findOneAndUpdate(filter, { $set: set }, { new: true });
+    if (!updated) {
+      console.warn('Template status update matched no local template:', templateData.name, status);
+    }
   }
 
   async processQuality(tenantId, qualityData) {

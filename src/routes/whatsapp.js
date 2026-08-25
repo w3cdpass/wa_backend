@@ -12,6 +12,7 @@ import {
   updateTemplateController,
   deleteTemplateController,
   submitTemplateController,
+  checkComplianceController,
 } from '../controllers/whatsapp.js';
 import { authenticate } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -46,6 +47,7 @@ router.get('/webhook-info', getWebhookInfoController);
 
 // Templates
 router.post('/templates/sync', syncTemplatesController);
+router.post('/templates/check-compliance', validate(createTemplateSchema), checkComplianceController);
 router.get('/templates', listTemplatesController);
 router.post('/templates', validate(createTemplateSchema), createTemplateController);
 router.get('/templates/:id', validate(templateIdParam), getTemplateController);

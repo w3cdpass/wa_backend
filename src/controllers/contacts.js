@@ -11,6 +11,7 @@ import {
   getGroupById,
   updateGroup,
   deleteGroup,
+  listTags,
 } from '../services/contacts.js';
 import { AppError } from '../middleware/errorHandler.js';
 
@@ -124,6 +125,15 @@ export const deleteGroupController = async (req, res, next) => {
   try {
     await deleteGroup(req.tenantId, req.params.id);
     res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const listContactTagsController = async (req, res, next) => {
+  try {
+    const tags = await listTags(req.tenantId);
+    res.json({ tags: tags.filter(Boolean) });
   } catch (error) {
     next(error);
   }

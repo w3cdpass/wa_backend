@@ -47,6 +47,13 @@ router.post('/', async (req, res) => {
     if (phoneNumberId) {
       waConfig = await WhatsAppConfig.findOne({ phoneNumberId });
     }
+    // Message/message-status events carry metadata.phone_number_id, but
+    // account-level events like message_template_status_update do NOT —
+    // they can only be attributed via entry.id (= WABA ID).
+    if (!waConfig) {
+      const wabaId = req.body?.entry?.[0]?.id;
+      if (wabaId) waConfig = await WhatsAppConfig.findOne({ wabaId });
+    }
     if (!waConfig && tokenFromQuery(req)) {
       waConfig = await WhatsAppConfig.findOne({ verifyToken: tokenFromQuery(req) });
     }
