@@ -60,6 +60,17 @@ router.get('/:id', async (req, res, next) => {
   }
 });
 
+// Delete all flows (clean slate)
+router.delete('/', async (req, res, next) => {
+  try {
+    const result = await Flow.deleteMany({ tenantId: req.tenantId });
+    await FlowRun.deleteMany({ tenantId: req.tenantId });
+    res.json({ deleted: result.deletedCount });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Delete flow
 router.delete('/:id', async (req, res, next) => {
   try {
