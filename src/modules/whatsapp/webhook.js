@@ -242,7 +242,9 @@ export class WebhookHandler {
       isFirstInbound,
     };
     
-    await flowEngine.dispatchInbound(flowInput);
+    await flowEngine.dispatchInbound(flowInput).catch(err => {
+      console.error('[webhook] flowEngine.dispatchInbound failed:', err.message, err.stack);
+    });
     
     await this.updateBroadcastRecipientStatus(tenantId, contact._id, metaMessageId, 'delivered');
   }

@@ -140,6 +140,8 @@ export class FlowEngine {
   async dispatchInbound(input) {
     const { tenantId, contactId, conversationId, message, isFirstInbound } = input;
     
+    console.log(`[flow] dispatchInbound tenant=${tenantId} contact=${contactId} msg=${JSON.stringify(message)}`);
+    
     const existingRun = await FlowRun.findOne({ 
       tenantId, 
       contactId, 
@@ -147,13 +149,17 @@ export class FlowEngine {
     });
     
     if (existingRun) {
+      console.log(`[flow] found existing running run ${existingRun._id} at node ${existingRun.currentNodeKey}`);
       return this.advanceRun(existingRun, message);
     }
     
     const flow = await this.findMatchingFlow(tenantId, message, isFirstInbound);
     if (!flow) {
+      console.log(`[flow] no matching flow for tenant=${tenantId}`);
       return { consumed: false };
     }
+    
+    console.log(`[flow] matched flow "${flow.name}" (${flow._id})`);
     
     const run = await FlowRun.create({
       flowId: flow._id,
@@ -165,19 +171,25 @@ export class FlowEngine {
       variables: {},
     });
     
+    console.log(`[flow] created run ${run._id} at node ${run.currentNodeKey}`);
+    
     return this.advanceRun(run, message);
   }
 
   async findMatchingFlow(tenantId, message, isFirstInbound) {
     const candidateTexts = entryTriggerTexts(message);
+    console.log(`[flow] findMatchingFlow candidateTexts=${JSON.stringify(candidateTexts)}`);
     const flows = await Flow.find({ tenantId, status: 'active' });
+    console.log(`[flow] found ${flows.length} active flows`);
     
     for (const flow of flows) {
       const trigger = flow.trigger;
+      console.log(`[flow] checking flow "${flow.name}" trigger=${JSON.stringify(trigger)}`);
       
       if (trigger.type === 'keyword') {
         for (const text of candidateTexts) {
           if (matchesKeywordTrigger(text, trigger.config)) {
+            console.log(`[flow] keyword match on "${text}"`);
             return flow;
           }
         }
@@ -208,9 +220,18 @@ export class FlowEngine {
     // Resolve node type: prefer backendNodeType (mapped by frontend), fall back to nodeType
     const nodeType = node.backendNodeType || node.nodeType;
     
+    // For most suspending nodes, block if message can't advance.
+    // For send_template: only block if template was already sent (waiting for reply).
     if (isSuspending(nodeType)) {
-      if (!this.canAdvanceFromSuspending(node, message, run)) {
-        return { consumed: true, outcome: 'awaiting_input' };
+      if (nodeType === NODE_TYPES.SEND_TEMPLATE) {
+        if (run.lastPromptNodeKey === node.nodeKey && !this.canAdvanceFromSuspending(node, message, run)) {
+          return { consumed: true, outcome: 'awaiting_input' };
+        }
+        // If template not yet sent, fall through to execute it
+      } else {
+        if (!this.canAdvanceFromSuspending(node, message, run)) {
+          return { consumed: true, outcome: 'awaiting_input' };
+        }
       }
     }
     
