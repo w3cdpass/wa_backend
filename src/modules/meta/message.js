@@ -5,19 +5,25 @@ export class MessageAPI {
     this.client = metaClient;
   }
 
-  async sendTemplate({ phoneNumberId, to, templateName, language, components, idempotencyKey }) {
+  async sendTemplate({ phoneNumberId, to, templateName, language = 'en_US', components, idempotencyKey }) {
     const client = this.client;
     const cleanTo = to.replace(/[^\d]/g, '');
     
+    const templatePayload = {
+      name: templateName,
+      language: { code: language },
+    };
+
+    if (components && components.length > 0) {
+      templatePayload.components = components;
+    }
+
     const payload = {
       messaging_product: 'whatsapp',
+      recipient_type: 'individual',
       to: cleanTo,
       type: 'template',
-      template: {
-        name: templateName,
-        language: { code: language },
-        components: components || [],
-      },
+      template: templatePayload,
     };
 
     return client.post(`/${phoneNumberId}/messages`, payload, { idempotencyKey });
