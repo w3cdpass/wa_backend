@@ -9,6 +9,7 @@ const NODE_TYPES = {
   SEND_MEDIA: 'send_media',
   SEND_BUTTONS: 'send_buttons',
   SEND_LIST: 'send_list',
+  SEND_TEMPLATE: 'send_template',
   CONDITION: 'condition',
   COLLECT_INPUT: 'collect_input',
   SET_TAG: 'set_tag',
@@ -78,6 +79,7 @@ function isSuspending(nodeType) {
   return [
     NODE_TYPES.SEND_BUTTONS,
     NODE_TYPES.SEND_LIST,
+    NODE_TYPES.SEND_TEMPLATE,
     NODE_TYPES.COLLECT_INPUT,
   ].includes(nodeType);
 }
@@ -215,11 +217,28 @@ export class FlowEngine {
         await this.executeSendButtons(flow, run, node, message);
         outcome = 'suspended';
         break;
-        
+
       case NODE_TYPES.SEND_LIST:
         await this.executeSendList(flow, run, node, message);
         outcome = 'suspended';
         break;
+
+      case NODE_TYPES.SEND_TEMPLATE: {
+        // On first visit: send the template. On button tap: find the edge
+        // matching the tapped button's output index and advance.
+        if (message.kind === 'interactive_reply' && this.canAdvanceFromSuspending(node, message)) {
+          const btnIndex = this.findTemplateButtonIndex(node, message);
+          nextNodeKey = this.getNextNodeKey(flow, node.nodeKey, btnIndex);
+          // Store which button was tapped in variables
+          await FlowRun.findByIdAndUpdate(run._id, {
+            $set: { [`variables._button_${btnIndex}`]: message.replyTitle || message.replyId },
+          });
+        } else {
+          await this.executeSendTemplate(flow, run, node, message);
+          outcome = 'suspended';
+        }
+        break;
+      }
         
       case NODE_TYPES.CONDITION:
         nextNodeKey = await this.executeCondition(run, node);
@@ -268,25 +287,36 @@ export class FlowEngine {
 
   canAdvanceFromSuspending(node, message, run) {
     if (message.kind !== 'interactive_reply') return false;
-    
+
     if (node.nodeType === NODE_TYPES.SEND_BUTTONS) {
       return node.config.buttons?.some(b => b.replyId === message.replyId);
     }
-    
+
     if (node.nodeType === NODE_TYPES.SEND_LIST) {
-      return node.config.sections?.some(s => 
+      return node.config.sections?.some(s =>
         s.rows?.some(r => r.replyId === message.replyId)
       );
     }
-    
+
+    // Templates: any button tap advances the flow
+    if (node.nodeType === NODE_TYPES.SEND_TEMPLATE) {
+      return true;
+    }
+
     if (node.nodeType === NODE_TYPES.COLLECT_INPUT) {
       return true;
     }
-    
+
     return false;
   }
 
-  getNextNodeKey(flow, currentNodeKey) {
+  getNextNodeKey(flow, currentNodeKey, outputIndex) {
+    // For multi-output nodes (buttons, templates), use outputIndex to pick the edge
+    if (outputIndex !== undefined && outputIndex !== null) {
+      const edge = flow.edges.find(e => e.from === currentNodeKey && e.outputIndex === outputIndex);
+      if (edge) return edge.to;
+    }
+    // Default: first edge from this node
     const edge = flow.edges.find(e => e.from === currentNodeKey);
     return edge?.to || null;
   }
@@ -393,6 +423,54 @@ export class FlowEngine {
     });
     
     if (!result.success) throw new Error(result.error);
+  }
+
+  async executeSendTemplate(flow, run, node, message) {
+    const config = await WhatsAppConfig.findOne({ tenantId: run.tenantId });
+    if (!config) throw new Error('WhatsApp not configured');
+
+    const { Template } = await import('../../models/index.js');
+    const template = await Template.findOne({ tenantId: run.tenantId, name: node.config.templateName });
+    if (!template) throw new Error(`Template "${node.config.templateName}" not found`);
+
+    const messageAPI = this.getMessageAPI(config.accessToken);
+
+    // Build variable parameters from context
+    const bodyParams = (template.sampleValues?.body || []).map((val, i) => {
+      const varValue = run.variables[`body_${i}`] || run.variables[`${i + 1}`] || val || '';
+      return { type: 'text', text: String(varValue) };
+    });
+
+    const result = await messageAPI.sendTemplate({
+      phoneNumberId: config.phoneNumberId,
+      to: run.contactId,
+      templateName: template.name,
+      language: template.language,
+      components: bodyParams.length ? [{ type: 'body', parameters: bodyParams }] : [],
+    });
+
+    if (!result.success) throw new Error(result.error || 'Template send failed');
+
+    // Store template info for button matching
+    const buttons = (template.buttons || []).map((b, i) => ({
+      title: b.text,
+      type: b.type,
+      index: i,
+    }));
+
+    await FlowRun.findByIdAndUpdate(run._id, {
+      lastPromptNodeKey: node.nodeKey,
+      $set: { [`_templateButtons`]: buttons },
+    });
+  }
+
+  findTemplateButtonIndex(node, message) {
+    // Match by button title or index
+    const buttons = node.config.buttons || [];
+    const idx = buttons.findIndex(b =>
+      b.title === message.replyTitle || b.replyId === message.replyId
+    );
+    return idx >= 0 ? idx : 0;
   }
 
   async executeCondition(run, node) {
