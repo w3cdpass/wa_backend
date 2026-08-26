@@ -632,6 +632,13 @@ export class FlowEngine {
     let header = null;
     if (mediaUrl && mediaUrl.startsWith('http')) {
       header = { type: 'image', image: { link: mediaUrl } };
+    } else if (mediaUrl && mediaUrl.startsWith('data:')) {
+      try {
+        const mediaId = await messageAPI.uploadMediaBuffer(config.phoneNumberId, mediaUrl);
+        header = { type: 'image', image: { id: mediaId } };
+      } catch (err) {
+        console.warn(`[flow] Failed to upload media to Meta, skipping header:`, err.message);
+      }
     } else if (node.config.header) {
       header = { type: 'text', text: { text: this.interpolateVariables(node.config.header, run.variables) } };
     }

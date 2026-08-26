@@ -1,4 +1,8 @@
 import { MetaClient, MetaAPIError } from './client.js';
+import axios from 'axios';
+
+const META_API_VERSION = process.env.META_API_VERSION || 'v21.0';
+const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
 
 export class MessageAPI {
   constructor(metaClient) {
@@ -46,8 +50,14 @@ export class MessageAPI {
   async sendMedia({ phoneNumberId, to, type, link, caption, filename, idempotencyKey }) {
     const client = this.client;
     const cleanTo = to.replace(/[^\d]/g, '');
-    
-    const mediaObj = { link };
+
+    let mediaObj = {};
+    if (link && link.startsWith('data:')) {
+      const mediaId = await this.uploadMediaBuffer(phoneNumberId, link);
+      mediaObj = { id: mediaId };
+    } else {
+      mediaObj = { link };
+    }
     if (caption) mediaObj.caption = caption;
     if (filename) mediaObj.filename = filename;
 
@@ -59,6 +69,37 @@ export class MessageAPI {
     };
 
     return client.post(`/${phoneNumberId}/messages`, payload, { idempotencyKey });
+  }
+
+  async uploadMediaBuffer(phoneNumberId, dataUrl) {
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) throw new Error('Invalid data URL');
+
+    const mimeType = match[1];
+    const base64Data = match[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    const ext = mimeType.split('/')[1]?.replace('jpeg', 'jpg') || 'bin';
+    const filename = `media_${Date.now()}.${ext}`;
+
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: mimeType }), filename);
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+
+    const response = await axios.post(
+      `${META_API_BASE}/${phoneNumberId}/media`,
+      form,
+      {
+        headers: {
+          Authorization: `Bearer ${this.client.accessToken}`,
+        },
+        timeout: 30000,
+      }
+    );
+
+    if (!response.data?.id) throw new Error('Media upload failed: no ID returned');
+    return response.data.id;
   }
 
   async sendInteractive({ phoneNumberId, to, type, body, header, footer, action, idempotencyKey }) {
