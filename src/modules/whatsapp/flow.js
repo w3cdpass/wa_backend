@@ -306,13 +306,7 @@ export class FlowEngine {
           lastActivityAt: new Date(),
         });
 
-        const nextNode = flow.nodes.find(n => n.nodeKey === nextNodeKey);
-        const nextType = nextNode?.backendNodeType || nextNode?.nodeType;
-
-        if (isAutoAdvancing(nextType)) {
-          return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
-        }
-        return { consumed: true, outcome: 'advanced', flowRunId: run._id };
+        return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
       }
 
       // ── Send Buttons click ──
@@ -325,12 +319,7 @@ export class FlowEngine {
             currentNodeKey: hit.nextNodeKey,
             lastActivityAt: new Date(),
           });
-          const nextNode = flow.nodes.find(n => n.nodeKey === hit.nextNodeKey);
-          const nextType = nextNode?.backendNodeType || nextNode?.nodeType;
-          if (isAutoAdvancing(nextType)) {
-            return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
-          }
-          return { consumed: true, outcome: 'advanced', flowRunId: run._id };
+          return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
         }
       }
 
@@ -345,7 +334,7 @@ export class FlowEngine {
               currentNodeKey: hit.nextNodeKey,
               lastActivityAt: new Date(),
             });
-            return { consumed: true, outcome: 'advanced', flowRunId: run._id };
+            return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
           }
         }
       }
@@ -359,12 +348,7 @@ export class FlowEngine {
             currentNodeKey: nextKey,
             lastActivityAt: new Date(),
           });
-          const nextNode = flow.nodes.find(n => n.nodeKey === nextKey);
-          const nextType = nextNode?.backendNodeType || nextNode?.nodeType;
-          if (isAutoAdvancing(nextType)) {
-            return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
-          }
-          return { consumed: true, outcome: 'advanced', flowRunId: run._id };
+          return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
         }
       }
 
@@ -436,7 +420,7 @@ export class FlowEngine {
           return { consumed: true, outcome: 'awaiting_input' };
         }
       } else {
-        if (!this.canAdvanceFromSuspending(node, message, run)) {
+        if (run.lastPromptNodeKey === node.nodeKey && !this.canAdvanceFromSuspending(node, message, run)) {
           return { consumed: true, outcome: 'awaiting_input' };
         }
       }
@@ -609,18 +593,28 @@ export class FlowEngine {
     const phone = await this._getContactPhone(run.tenantId, run.contactId);
 
     const messageAPI = this.getMessageAPI(config.accessToken);
-    const mediaUrl = this.interpolateVariables(node.config.mediaUrl || '', run.variables);
+    // Support both 'media' (frontend key) and 'mediaUrl' (legacy key)
+    const mediaUrl = this.interpolateVariables(node.config.media || node.config.mediaUrl || '', run.variables);
     const caption = this.interpolateVariables(node.config.caption || '', run.variables);
+
+    // Auto-detect media type from URL extension
+    let mediaType = node.config.mediaType || 'image';
+    if (mediaUrl.match(/\.mp4(\?|$)/i)) mediaType = 'video';
+    else if (mediaUrl.match(/\.pdf(\?|$)/i)) mediaType = 'document';
+    else if (mediaUrl.match(/\.(ogg|opus|mp3|wav|m4a)(\?|$)/i)) mediaType = 'audio';
+
+    console.log(`[flow] executeSendMedia to=${phone} type=${mediaType} url=${mediaUrl}`);
 
     const result = await messageAPI.sendMedia({
       phoneNumberId: config.phoneNumberId,
       to: phone,
-      type: node.config.mediaType || 'image',
+      type: mediaType,
       link: mediaUrl,
       caption,
     });
 
     if (!result || !result.messages) throw new Error('Media send failed');
+    console.log(`[flow] executeSendMedia sent messageId=${result.messages[0].id}`);
   }
 
   async executeSendButtons(flow, run, node, message) {
@@ -628,14 +622,29 @@ export class FlowEngine {
     const phone = await this._getContactPhone(run.tenantId, run.contactId);
 
     const messageAPI = this.getMessageAPI(config.accessToken);
-    const body = this.interpolateVariables(node.config.body || '', run.variables);
-    const header = node.config.header ? this.interpolateVariables(node.config.header, run.variables) : null;
+
+    // Support both 'media-button' (media + caption + buttons) and 'text-button' (text + buttons)
+    const body = this.interpolateVariables(node.config.body || node.config.caption || '', run.variables);
     const footer = node.config.footer ? this.interpolateVariables(node.config.footer, run.variables) : null;
+    const mediaUrl = node.config.media ? this.interpolateVariables(node.config.media, run.variables) : null;
+
+    // Build header: image if media URL present, otherwise text header if provided
+    let header = null;
+    if (mediaUrl && mediaUrl.startsWith('http')) {
+      header = { type: 'image', image: { link: mediaUrl } };
+    } else if (node.config.header) {
+      header = { type: 'text', text: { text: this.interpolateVariables(node.config.header, run.variables) } };
+    }
 
     const buttons = (node.config.buttons || []).map(b => ({
-      id: b.replyId,
-      title: this.interpolateVariables(b.title || '', run.variables),
+      type: 'reply',
+      reply: {
+        id: b.replyId || b.id || `btn_${Math.random().toString(36).slice(2, 8)}`,
+        title: this.interpolateVariables(b.title || '', run.variables),
+      },
     }));
+
+    console.log(`[flow] executeSendButtons to=${phone} body="${body}" media=${mediaUrl || 'none'} buttons=${buttons.length}`);
 
     await FlowRun.findByIdAndUpdate(run._id, {
       lastPromptMessageId: null,
@@ -656,6 +665,7 @@ export class FlowEngine {
       await FlowRun.findByIdAndUpdate(run._id, {
         lastPromptMessageId: result.messages[0].id,
       });
+      console.log(`[flow] executeSendButtons sent messageId=${result.messages[0].id}`);
     }
   }
 
