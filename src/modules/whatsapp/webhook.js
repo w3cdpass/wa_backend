@@ -245,6 +245,7 @@ export class WebhookHandler {
         ? { kind: 'interactive_reply', replyId: interactiveReplyId, replyTitle: contentText, metaMessageId }
         : { kind: 'text', text: contentText || '', metaMessageId },
       isFirstInbound,
+      contextId: msg.context?.id || null,
     };
     
     await flowEngine.dispatchInbound(flowInput).catch(err => {

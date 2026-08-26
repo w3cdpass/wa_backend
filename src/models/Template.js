@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 const templateButtonSchema = new mongoose.Schema({
   type: { type: String, enum: ['QUICK_REPLY', 'URL', 'PHONE_NUMBER', 'COPY_CODE', 'OTP', 'FLOW', 'CATALOG'], required: true },
   text: { type: String, required: true },
+  payload: String,
   url: String,
   phoneNumber: String,
   example: String,

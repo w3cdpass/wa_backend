@@ -175,6 +175,7 @@ router.post('/:id/send', async (req, res, next) => {
           if (result && result.messages) {
             await FlowRun.findByIdAndUpdate(run._id, {
               lastPromptNodeKey: startNode.nodeKey,
+              lastPromptMessageId: result.messages[0].id,
             });
           }
         } else if (nodeType === 'send_message') {

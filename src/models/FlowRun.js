@@ -21,6 +21,7 @@ flowRunSchema.index({ tenantId: 1, contactId: 1, status: 1 }, { unique: true, pa
 flowRunSchema.index({ flowId: 1, status: 1 });
 flowRunSchema.index({ tenantId: 1, status: 1, lastActivityAt: -1 });
 flowRunSchema.index({ conversationId: 1 });
+flowRunSchema.index({ tenantId: 1, lastPromptMessageId: 1 });
 
 export const FlowRun = mongoose.model('FlowRun', flowRunSchema);
 export default FlowRun;

@@ -138,15 +138,32 @@ export class FlowEngine {
   }
 
   async dispatchInbound(input) {
-    const { tenantId, contactId, conversationId, message, isFirstInbound } = input;
+    const { tenantId, contactId, conversationId, message, isFirstInbound, contextId } = input;
     
-    console.log(`[flow] dispatchInbound tenant=${tenantId} contact=${contactId} msg=${JSON.stringify(message)}`);
+    console.log(`[flow] dispatchInbound tenant=${tenantId} contact=${contactId} msg=${JSON.stringify(message)} contextId=${contextId}`);
     
-    const existingRun = await FlowRun.findOne({ 
-      tenantId, 
-      contactId, 
-      status: 'running' 
-    });
+    // First try to find by contextId (original template message WAMID)
+    let existingRun = null;
+    if (contextId) {
+      existingRun = await FlowRun.findOne({ 
+        tenantId, 
+        lastPromptMessageId: contextId, 
+        status: 'running' 
+      });
+      if (existingRun) {
+        console.log(`[flow] found existing run ${existingRun._id} by contextId=${contextId}`);
+      }
+    }
+    if (!existingRun) {
+      existingRun = await FlowRun.findOne({ 
+        tenantId, 
+        contactId, 
+        status: 'running' 
+      });
+      if (existingRun) {
+        console.log(`[flow] found existing run ${existingRun._id} by contactId=${contactId}`);
+      }
+    }
     
     if (existingRun) {
       console.log(`[flow] found existing running run ${existingRun._id} at node ${existingRun.currentNodeKey}`);
@@ -507,21 +524,26 @@ export class FlowEngine {
     // Store template info for button matching
     const buttons = (template.buttons || []).map((b, i) => ({
       title: b.text,
+      payload: b.payload || '',
       type: b.type,
       index: i,
     }));
 
     await FlowRun.findByIdAndUpdate(run._id, {
       lastPromptNodeKey: node.nodeKey,
+      lastPromptMessageId: result.messages[0].id,
       $set: { [`_templateButtons`]: buttons },
     });
   }
 
   findTemplateButtonIndex(node, message) {
     const buttons = node.config.templateButtons || node.config.buttons || [];
-    const idx = buttons.findIndex(b =>
-      b.title === message.replyTitle || b.title === message.replyId
-    );
+    const replyPayload = message.replyId || '';
+    const replyText = message.replyTitle || '';
+    // Match on payload first (authoritative), then fall back to visible text
+    let idx = buttons.findIndex(b => b.payload && b.payload === replyPayload);
+    if (idx >= 0) return idx;
+    idx = buttons.findIndex(b => b.title === replyText || b.text === replyText);
     return idx >= 0 ? idx : 0;
   }
 

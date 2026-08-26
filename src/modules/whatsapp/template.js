@@ -152,6 +152,7 @@ export class TemplateService {
     const parsedButtons = buttons?.buttons?.map(btn => ({
       type: btn.type,
       text: btn.text,
+      payload: btn.payload,
       url: btn.url,
       phoneNumber: btn.phone_number,
       example: Array.isArray(btn.example) ? btn.example[0] : btn.example,
