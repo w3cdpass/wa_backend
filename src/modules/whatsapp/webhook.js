@@ -264,10 +264,12 @@ export class WebhookHandler {
     });
 
     await Conversation.findByIdAndUpdate(conversation._id, {
-      lastMessageText: contentText || `[${msg.type}]`,
-      lastMessageAt: timestamp,
-      unreadCount: { $inc: 1 },
-      status: 'open',
+      $set: {
+        lastMessageText: contentText || `[${msg.type}]`,
+        lastMessageAt: timestamp,
+        status: 'open',
+      },
+      $inc: { unreadCount: 1 },
     });
 
     // ── Check first inbound ──
