@@ -266,7 +266,9 @@ export class FlowEngine {
       case NODE_TYPES.SEND_TEMPLATE: {
         if (message.kind === 'interactive_reply' && this.canAdvanceFromSuspending(node, message)) {
           const btnIndex = this.findTemplateButtonIndex(node, message);
-          nextNodeKey = this.getNextNodeKey(flow, node.nodeKey, btnIndex);
+          // Drawflow outputs are 1-based (output_1, output_2), so add 1
+          const outputIndex = btnIndex + 1;
+          nextNodeKey = this.getNextNodeKey(flow, node.nodeKey, outputIndex);
           await FlowRun.findByIdAndUpdate(run._id, {
             $set: { [`variables._button_${btnIndex}`]: message.replyTitle || message.replyId },
           });
