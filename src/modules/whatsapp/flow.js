@@ -249,16 +249,31 @@ export class FlowEngine {
         return { consumed: true, outcome: 'failed' };
       }
 
-      const node = flow.nodes.find(n => n.nodeKey === run.currentNodeKey);
+      let node = flow.nodes.find(n => n.nodeKey === run.currentNodeKey);
+      const nodeType = node?.backendNodeType || node?.nodeType;
+
+      // ── If current node is NOT a template but we have a lastPromptNodeKey
+      //    matching a send_template, the user clicked a button on an OLD template
+      //    message. Find the original template node and route from there.
+      let templateNode = null;
+      if (nodeType !== NODE_TYPES.SEND_TEMPLATE && run.lastPromptNodeKey) {
+        templateNode = flow.nodes.find(n => n.nodeKey === run.lastPromptNodeKey);
+        const templateType = templateNode?.backendNodeType || templateNode?.nodeType;
+        if (templateType === NODE_TYPES.SEND_TEMPLATE) {
+          console.log(`[flow] current node is ${nodeType}, routing from original template node ${run.lastPromptNodeKey}`);
+          node = templateNode;
+        } else {
+          templateNode = null;
+        }
+      }
+
       if (!node) {
         await this.completeRun(run, 'failed');
         return { consumed: true, outcome: 'failed' };
       }
 
-      const nodeType = node.backendNodeType || node.nodeType;
-
       // ── Send Template button click ──
-      if (nodeType === NODE_TYPES.SEND_TEMPLATE && run.lastPromptNodeKey === node.nodeKey) {
+      if ((node.backendNodeType || node.nodeType) === NODE_TYPES.SEND_TEMPLATE) {
         const btnIndex = this.findTemplateButtonIndex(node, message);
         const outputIndex = btnIndex + 1;
         const nextNodeKey = this.getNextNodeKey(flow, node.nodeKey, outputIndex);
@@ -275,7 +290,6 @@ export class FlowEngine {
           }))
         ));
 
-        // Store button selection in variables
         await FlowRun.findByIdAndUpdate(run._id, {
           $set: {
             [`variables._button_${btnIndex}`]: message.replyTitle || message.replyId,
@@ -283,17 +297,7 @@ export class FlowEngine {
         });
 
         if (!nextNodeKey) {
-          console.log(`[flow] no edge found for outputIndex=${outputIndex}, using fallback`);
-          const fallbackKey = this.getNextNodeKey(flow, node.nodeKey);
-          if (fallbackKey) {
-            await FlowRun.findByIdAndUpdate(run._id, { currentNodeKey: fallbackKey, lastActivityAt: new Date() });
-            const nextNode = flow.nodes.find(n => n.nodeKey === fallbackKey);
-            const nextType = nextNode?.backendNodeType || nextNode?.nodeType;
-            if (isAutoAdvancing(nextType)) {
-              return this.advanceRun(await FlowRun.findById(run._id), { kind: 'auto', text: '' });
-            }
-            return { consumed: true, outcome: 'advanced', flowRunId: run._id };
-          }
+          console.log(`[flow] no edge for outputIndex=${outputIndex}`);
           return { consumed: true, outcome: 'completed', flowRunId: run._id };
         }
 
@@ -364,7 +368,7 @@ export class FlowEngine {
         }
       }
 
-      // ── Unknown / unmatched reply → apply fallback policy ──
+      // ── Unknown → fallback ──
       console.log(`[flow] no match for button on nodeType=${nodeType}, applying fallback`);
       return this.handleFallback(run, flow, node, message);
     } catch (err) {
