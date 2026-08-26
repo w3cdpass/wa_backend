@@ -219,6 +219,7 @@ export class FlowEngine {
 
     // Resolve node type: prefer backendNodeType (mapped by frontend), fall back to nodeType
     const nodeType = node.backendNodeType || node.nodeType;
+    console.log(`[flow] advanceRun nodeKey=${node.nodeKey} nodeType=${nodeType} msgKind=${message.kind} lastPrompt=${run.lastPromptNodeKey}`);
     
     // For most suspending nodes, block if message can't advance.
     // For send_template: only block if template was already sent (waiting for reply).
@@ -269,6 +270,9 @@ export class FlowEngine {
           // Drawflow outputs are 1-based (output_1, output_2), so add 1
           const outputIndex = btnIndex + 1;
           nextNodeKey = this.getNextNodeKey(flow, node.nodeKey, outputIndex);
+          console.log(`[flow] SEND_TEMPLATE button click: replyTitle="${message.replyTitle}" replyId="${message.replyId}" btnIndex=${btnIndex} outputIndex=${outputIndex} nextNodeKey=${nextNodeKey}`);
+          console.log(`[flow] available buttons:`, JSON.stringify((node.config.templateButtons || node.config.buttons || []).map(b => b.title)));
+          console.log(`[flow] available edges from ${node.nodeKey}:`, JSON.stringify(flow.edges.filter(e => e.from === node.nodeKey).map(e => ({ to: e.to, outputIndex: e.outputIndex, sourceHandle: e.sourceHandle }))));
           await FlowRun.findByIdAndUpdate(run._id, {
             $set: { [`variables._button_${btnIndex}`]: message.replyTitle || message.replyId },
           });

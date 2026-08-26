@@ -194,6 +194,11 @@ export class WebhookHandler {
           contentText = msg.interactive.list_reply.title;
         }
         break;
+      case 'button':
+        contentType = 'interactive';
+        interactiveReplyId = msg.button?.payload || msg.button?.text;
+        contentText = msg.button?.text || msg.button?.payload;
+        break;
       case 'location':
         contentType = 'location';
         break;

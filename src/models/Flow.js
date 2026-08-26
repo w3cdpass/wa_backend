@@ -16,6 +16,7 @@ const flowEdgeSchema = new mongoose.Schema({
   label: String,
   sourceHandle: String,
   targetHandle: String,
+  outputIndex: { type: Number, default: null },
 }, { _id: false });
 
 const fallbackPolicySchema = new mongoose.Schema({
