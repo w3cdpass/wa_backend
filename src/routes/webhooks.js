@@ -39,6 +39,8 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
+    console.log(JSON.stringify(req.body, null, 2));
+
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const phoneNumberId = value?.metadata?.phone_number_id;

@@ -138,6 +138,16 @@ export class MessageAPI {
     return client.get(`/${messageId}`);
   }
 
+  async markRead(phoneNumberId, messageId) {
+    const client = this.client;
+    const payload = {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+    };
+    return client.post(`/${phoneNumberId}/messages`, payload);
+  }
+
   async deleteMessage(messageId, accessToken) {
     const client = new MetaClient(accessToken);
     return client.delete(`/${messageId}`);

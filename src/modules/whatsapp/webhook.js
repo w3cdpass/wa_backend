@@ -9,6 +9,8 @@ import { Template } from '../../models/Template.js';
 import { WhatsAppConfig } from '../../models/WhatsAppConfig.js';
 import { flowEngine } from './flow.js';
 import { inboxService } from './inbox.js';
+import { WhatsAppConfigService } from './config.js';
+import { createMessageAPI } from '../meta/index.js';
 import { normalizePhone, phoneVariants } from '../../utils/phone.js';
 
 export class WebhookHandler {
@@ -128,7 +130,11 @@ export class WebhookHandler {
     const from = normalizePhone(msg.from);
     const metaMessageId = msg.id;
     const timestamp = new Date(parseInt(msg.timestamp) * 1000);
-    
+
+    console.log(`[webhook] processMessage type="${msg.type}" from=${from} id=${metaMessageId}`);
+    console.log(`[webhook]   full msg:`, JSON.stringify(msg, null, 2));
+
+    // ── Contact upsert ──
     let contact = await Contact.findOne({ tenantId, phone: from });
     if (!contact) {
       contact = await Contact.create({
@@ -137,8 +143,10 @@ export class WebhookHandler {
         name: msg.contacts?.[0]?.profile?.name,
         source: 'webhook',
       });
+      console.log(`[webhook]   created contact ${contact._id}`);
     }
-    
+
+    // ── Conversation upsert ──
     let conversation = await Conversation.findOne({ tenantId, contactId: contact._id });
     if (!conversation) {
       conversation = await Conversation.create({
@@ -148,11 +156,17 @@ export class WebhookHandler {
         status: 'open',
         lastMessageAt: timestamp,
       });
+      console.log(`[webhook]   created conversation ${conversation._id}`);
     }
-    
+
+    // ── Dedup ──
     const existingMessage = await Message.findOne({ metaMessageId, tenantId });
-    if (existingMessage) return;
-    
+    if (existingMessage) {
+      console.log(`[webhook]   duplicate message ${metaMessageId}, skipping`);
+      return;
+    }
+
+    // ── Parse content ──
     let contentText = null;
     let contentType = msg.type;
     let mediaUrl = null;
@@ -160,53 +174,78 @@ export class WebhookHandler {
     let mediaSize = null;
     let mediaCaption = null;
     let interactiveReplyId = null;
-    
+
     switch (msg.type) {
       case 'text':
         contentText = msg.text?.body;
+        console.log(`[webhook]   text: "${contentText}"`);
         break;
       case 'image':
         mediaUrl = msg.image?.link;
         mediaType = 'image';
         mediaCaption = msg.image?.caption;
+        console.log(`[webhook]   image link=${mediaUrl}`);
         break;
       case 'video':
         mediaUrl = msg.video?.link;
         mediaType = 'video';
         mediaCaption = msg.video?.caption;
+        console.log(`[webhook]   video link=${mediaUrl}`);
         break;
       case 'document':
         mediaUrl = msg.document?.link;
         mediaType = 'document';
         mediaCaption = msg.document?.caption;
+        console.log(`[webhook]   document link=${mediaUrl}`);
         break;
       case 'audio':
         mediaUrl = msg.audio?.link;
         mediaType = 'audio';
+        console.log(`[webhook]   audio link=${mediaUrl}`);
         break;
       case 'interactive':
         contentType = 'interactive';
         if (msg.interactive?.type === 'button_reply') {
           interactiveReplyId = msg.interactive.button_reply.id;
           contentText = msg.interactive.button_reply.title;
+          console.log(`[webhook]   button_reply id="${interactiveReplyId}" title="${contentText}"`);
+          console.log(`[webhook]   interactive full:`, JSON.stringify(msg.interactive));
         } else if (msg.interactive?.type === 'list_reply') {
           interactiveReplyId = msg.interactive.list_reply.id;
           contentText = msg.interactive.list_reply.title;
+          console.log(`[webhook]   list_reply id="${interactiveReplyId}" title="${contentText}"`);
+          console.log(`[webhook]   interactive full:`, JSON.stringify(msg.interactive));
+        } else {
+          console.log(`[webhook]   unknown interactive type="${msg.interactive?.type}"`, JSON.stringify(msg.interactive));
         }
         break;
       case 'button':
         contentType = 'interactive';
         interactiveReplyId = msg.button?.payload || msg.button?.text;
         contentText = msg.button?.text || msg.button?.payload;
+        console.log(`[webhook]   button payload="${msg.button?.payload}" text="${msg.button?.text}"`);
+        console.log(`[webhook]   button full:`, JSON.stringify(msg.button));
         break;
       case 'location':
         contentType = 'location';
+        console.log(`[webhook]   location lat=${msg.location?.latitude} lng=${msg.location?.longitude}`);
         break;
       case 'template':
         contentType = 'template';
+        console.log(`[webhook]   template message (outbound echo)`);
+        break;
+      default:
+        console.log(`[webhook]   unhandled type="${msg.type}"`, JSON.stringify(msg));
         break;
     }
-    
+
+    // ── context.id extraction ──
+    const contextId = msg.context?.id || null;
+    if (contextId) {
+      console.log(`[webhook]   context.id="${contextId}" (original message WAMID)`);
+    }
+
+    // ── Persist message ──
     const message = await Message.create({
       tenantId,
       conversationId: conversation._id,
@@ -223,20 +262,21 @@ export class WebhookHandler {
       interactiveReplyId,
       createdAt: timestamp,
     });
-    
+
     await Conversation.findByIdAndUpdate(conversation._id, {
       lastMessageText: contentText || `[${msg.type}]`,
       lastMessageAt: timestamp,
       unreadCount: { $inc: 1 },
       status: 'open',
     });
-    
-    const config = await WhatsAppConfig.findOne({ tenantId });
-    const isFirstInbound = await Message.countDocuments({ 
-      conversationId: conversation._id, 
-      direction: 'inbound' 
+
+    // ── Check first inbound ──
+    const isFirstInbound = await Message.countDocuments({
+      conversationId: conversation._id,
+      direction: 'inbound',
     }) === 1;
-    
+
+    // ── Build flow input ──
     const flowInput = {
       tenantId,
       contactId: contact._id,
@@ -245,13 +285,34 @@ export class WebhookHandler {
         ? { kind: 'interactive_reply', replyId: interactiveReplyId, replyTitle: contentText, metaMessageId }
         : { kind: 'text', text: contentText || '', metaMessageId },
       isFirstInbound,
-      contextId: msg.context?.id || null,
+      contextId,
     };
-    
-    await flowEngine.dispatchInbound(flowInput).catch(err => {
-      console.error('[webhook] flowEngine.dispatchInbound failed:', err.message, err.stack);
+
+    console.log(`[webhook]   dispatching to flow engine: kind=${flowInput.message.kind} replyId="${flowInput.message.replyId || ''}" replyTitle="${flowInput.message.replyTitle || ''}" contextId="${contextId || ''}"`);
+
+    // ── Dispatch to flow engine ──
+    const flowResult = await flowEngine.dispatchInbound(flowInput).catch(err => {
+      console.error('[webhook] flowEngine.dispatchInbound error:', err.message, err.stack);
+      return { consumed: false, error: err.message };
     });
-    
+
+    console.log(`[webhook]   flow result:`, JSON.stringify(flowResult));
+
+    // ── Mark as read (blue tick) ──
+    if (flowResult?.consumed) {
+      try {
+        const configService = new WhatsAppConfigService();
+        const cfg = await configService.getConfig(tenantId);
+        if (cfg?.accessToken) {
+          const messageAPI = createMessageAPI(cfg.accessToken);
+          await messageAPI.markRead(cfg.phoneNumberId, metaMessageId);
+          console.log(`[webhook]   marked message ${metaMessageId} as read`);
+        }
+      } catch (readErr) {
+        console.warn('[webhook] markRead failed (non-critical):', readErr.message);
+      }
+    }
+
     await this.updateBroadcastRecipientStatus(tenantId, contact._id, metaMessageId, 'delivered');
   }
 
