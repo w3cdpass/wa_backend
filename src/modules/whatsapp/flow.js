@@ -512,10 +512,9 @@ export class FlowEngine {
   }
 
   findTemplateButtonIndex(node, message) {
-    // Match by button title or index
-    const buttons = node.config.buttons || [];
+    const buttons = node.config.templateButtons || node.config.buttons || [];
     const idx = buttons.findIndex(b =>
-      b.title === message.replyTitle || b.replyId === message.replyId
+      b.title === message.replyTitle || b.title === message.replyId
     );
     return idx >= 0 ? idx : 0;
   }
